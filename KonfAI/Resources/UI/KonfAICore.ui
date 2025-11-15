@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>KonfAIWidget</class>
+ <widget class="qMRMLWidget" name="KonfAICoreWidget">
+  <layout class="QVBoxLayout" name="verticalLayout_root">
+<item>
+  <widget class="QWidget" name="headerWidget">
+    <property name="sizePolicy">
+      <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+      </sizepolicy>
+    </property>
+
+    <layout class="QHBoxLayout" name="headerLayout">
+      <property name="contentsMargins">
+        <rect>
+          <x>0</x>
+          <y>4</y>
+          <width>0</width>
+          <height>4</height>
+        </rect>
+      </property>
+
+      <item>
+        <widget class="QFrame" name="headerLeftLine">
+          <property name="frameShape">
+            <enum>QFrame::HLine</enum>
+          </property>
+          <property name="frameShadow">
+            <enum>QFrame::Sunken</enum>
+          </property>
+        </widget>
+      </item>
+
+      <item>
+        <widget class="QLabel" name="headerTitleLabel">
+          <property name="text">
+            <string></string>
+          </property>
+          <property name="alignment">
+            <set>Qt::AlignCenter</set>
+          </property>
+          <property name="styleSheet">
+            <string notr="true">
+              font-weight: 600;
+              font-size: 13px;
+            </string>
+          </property>
+        </widget>
+      </item>
+
+      <item>
+        <widget class="QFrame" name="headerRightLine">
+          <property name="frameShape">
+            <enum>QFrame::HLine</enum>
+          </property>
+          <property name="frameShadow">
+            <enum>QFrame::Sunken</enum>
+          </property>
+        </widget>
+      </item>
+
+    </layout>
+  </widget>
+</item>
+   
+   <!-- ===== Advanced ===== -->
+   <item>
+    <widget class="QWidget" name="advancedCollapsible">
+     <layout class="QFormLayout" name="formLayout_advanced">
+      <item row="0" column="0">
+       <widget class="QLabel" name="label_device">
+        <property name="text"><string>Device</string></property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QComboBox" name="deviceComboBox"/>
+      </item>
+     </layout>
+    </widget>
+   </item>
+    
+   <!-- ===== Actions / RAM / VRAM ===== -->
+   <item>
+    <layout class="QHBoxLayout" name="hLayout_actions">
+     <item>
+      <widget class="QProgressBar" name="progressBar">
+       <property name="value"><number>0</number></property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QLabel" name="speedLabel">
+       <property name="text"><string>0 it/s</string></property>
+       <property name="alignment"><set>Qt::AlignLeft|Qt::AlignVCenter</set></property>
+       <property name="styleSheet"><string notr="true">font-size:11px; color:gray;</string></property>
+      </widget>
+     </item>
+          <item>
+      <widget class="QToolButton" name="openTempButton">
+       <property name="toolTip"><string>Open temporary folder</string></property>
+       <property name="autoRaise"><bool>true</bool></property>
+       <property name="icon">
+        <iconset><normaloff>:/Icons/folder-open.png</normaloff>:/Icons/folder-open.png</iconset>
+       </property>
+       <property name="iconSize"><size><width>16</width><height>16</height></size></property>
+       <property name="flat"><bool>true</bool></property>
+       <property name="text"><string></string></property>
+       <property name="maximumSize"><size><width>24</width><height>24</height></size></property>
+       <property name="minimumSize"><size><width>24</width><height>24</height></size></property>
+       <property name="styleSheet"><string notr="true">padding:0px; margin:0px;</string></property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+
+   <item>
+    <layout class="QVBoxLayout" name="ramLayout">
+     <property name="spacing"><number>2</number></property>
+     <item>
+      <widget class="QLabel" name="ramLabel">
+       <property name="text"><string>RAM: 0.0G / 0.0G</string></property>
+       <property name="alignment"><set>Qt::AlignLeft|Qt::AlignVCenter</set></property>
+       <property name="styleSheet"><string notr="true">font-size:10px; color:gray;</string></property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QProgressBar" name="ramProgressBar">
+       <property name="minimum"><number>0</number></property>
+       <property name="maximum"><number>100</number></property>
+       <property name="value"><number>0</number></property>
+       <property name="textVisible"><bool>false</bool></property>
+       <property name="maximumHeight"><number>6</number></property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+
+   <item>
+    <layout class="QVBoxLayout" name="vramLayout">
+     <property name="spacing"><number>2</number></property>
+     <item>
+      <widget class="QLabel" name="gpuLabel">
+       <property name="text"><string>VRAM: 0.0G / 0.0G</string></property>
+       <property name="alignment"><set>Qt::AlignLeft|Qt::AlignVCenter</set></property>
+       <property name="styleSheet"><string notr="true">font-size:10px; color:gray;</string></property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QProgressBar" name="gpuProgressBar">
+       <property name="minimum"><number>0</number></property>
+       <property name="maximum"><number>100</number></property>
+       <property name="value"><number>0</number></property>
+       <property name="textVisible"><bool>false</bool></property>
+       <property name="maximumHeight"><number>6</number></property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+
+   <!-- ===== Logs ===== -->
+   <item>
+    <widget class="QPlainTextEdit" name="logText">
+     <property name="readOnly"><bool>true</bool></property>
+     <property name="placeholderText"><string>Logs…</string></property>
+    </widget>
+   </item>
+
+  </layout>
+ </widget>
+
+ <!-- Connexions MRML locales -->
+ <connections/>
+
+ <!-- Custom widgets -->
+ <customwidgets>
+  <customwidget>
+   <class>qMRMLNodeComboBox</class><extends>QWidget</extends>
+   <header>qMRMLWidgets/qMRMLNodeComboBox.h</header>
+  </customwidget>
+ </customwidgets>
+
+ <!-- Ressources -->
+ <resources>
+  <include location="../Resources.qrc"/>
+ </resources>
+</ui>

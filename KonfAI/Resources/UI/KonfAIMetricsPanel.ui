@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>KonfAIMetricsPanel</class>
+ <widget class="QWidget" name="KonfAIMetricsPanel">
+ 
+  <layout class="QHBoxLayout" name="rowLayout">
+     <property name="stretch">
+      <string>1,1</string>
+    </property>
+    <property name="spacing"><number>20</number></property>
+    <property name="leftMargin"><number>0</number></property>
+    <property name="rightMargin"><number>0</number></property>
+    <property name="topMargin"><number>0</number></property>
+    <property name="bottomMargin"><number>0</number></property>
+
+    <item>
+      <widget class="QWidget" name="imagesWidget">
+        <layout class="QVBoxLayout" name="imagesMainLayout">
+          
+          <property name="spacing"><number>4</number></property>
+          <property name="leftMargin"><number>0</number></property>
+          <property name="rightMargin"><number>0</number></property>
+          <property name="topMargin"><number>0</number></property>
+          <property name="bottomMargin"><number>0</number></property>
+
+          <item>
+            <widget class="QLabel" name="label_images">
+              <property name="text">
+                <string>Images</string>
+              </property>
+              <property name="alignment">
+                <set>Qt::AlignHCenter</set>
+              </property>
+              <property name="styleSheet">
+                <string notr="true">font-weight: bold;</string>
+              </property>
+            </widget>
+          </item>
+
+          <item>
+            <widget class="QFrame" name="imagesFrame">
+                <property name="sizePolicy">
+    <sizepolicy hsizetype="Preferred" vsizetype="Preferred"/>
+  </property>
+              <property name="frameShape">
+                <enum>QFrame::StyledPanel</enum>
+              </property>
+              <property name="frameShadow">
+                <enum>QFrame::Plain</enum>
+              </property>
+              <layout class="QVBoxLayout" name="imagesLayout">
+                <property name="leftMargin"><number>4</number></property>
+                <property name="rightMargin"><number>4</number></property>
+                <property name="topMargin"><number>4</number></property>
+                <property name="bottomMargin"><number>4</number></property>
+                <item>
+                  <widget class="QListWidget" name="imagesListWidget">
+                    <property name="sizePolicy">
+    <sizepolicy hsizetype="Preferred" vsizetype="Preferred"/>
+  </property>
+                    <property name="selectionMode">
+                      <enum>QAbstractItemView::SingleSelection</enum>
+                    </property>
+                  </widget>
+                </item>
+              </layout>
+            </widget>
+          </item>
+        </layout>
+      </widget>
+    </item>
+
+    <item>
+      <widget class="QWidget" name="metricsWidget">
+
+        <layout class="QVBoxLayout" name="metricsMainLayout">
+          <property name="spacing"><number>4</number></property>
+          <property name="leftMargin"><number>0</number></property>
+          <property name="rightMargin"><number>0</number></property>
+          <property name="topMargin"><number>0</number></property>
+          <property name="bottomMargin"><number>0</number></property>
+          <item>
+            <widget class="QLabel" name="label_metrics">
+              <property name="text">
+                <string>Metrics</string>
+              </property>
+              <property name="alignment">
+                <set>Qt::AlignHCenter</set>
+              </property>
+              <property name="styleSheet">
+                <string notr="true">font-weight: bold;</string>
+              </property>
+            </widget>
+          </item>
+
+          <item>
+            <widget class="QFrame" name="metricsFrame">
+             <property name="sizePolicy">
+        <sizepolicy hsizetype="Preferred" vsizetype="Preferred"/>
+      </property>
+              <property name="frameShape">
+                <enum>QFrame::StyledPanel</enum>
+              </property>
+              <property name="frameShadow">
+                <enum>QFrame::Plain</enum>
+              </property>
+              <layout class="QVBoxLayout" name="metricsLayout">
+                <property name="leftMargin"><number>4</number></property>
+                <property name="rightMargin"><number>4</number></property>
+                <property name="topMargin"><number>4</number></property>
+                <property name="bottomMargin"><number>4</number></property>
+                <item>
+                  <widget class="QListWidget" name="metricsListWidget">
+                                      <property name="sizePolicy">
+    <sizepolicy hsizetype="Preferred" vsizetype="Preferred"/>
+  </property>
+                    <property name="selectionMode">
+                      <enum>QAbstractItemView::SingleSelection</enum>
+                    </property>
+                  </widget>
+                </item>
+              </layout>
+            </widget>
+          </item>
+        </layout>
+      </widget>
+    </item>
+
+  </layout>
+ </widget>
+</ui>
