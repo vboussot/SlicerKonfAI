@@ -149,9 +149,13 @@ class Process(QProcess):
 
     def run(self, work_dir: Path, args: list[str], on_end_function):
         self.setWorkingDirectory(str(work_dir))
+        try:
+            self.finished.disconnect()
+        except TypeError:
+            pass
         self.finished.connect(on_end_function)
 
-        self.start("konfai", args)
+        self.start("konfai-apps", args)
     
     def stop(self):
         self.kill()
@@ -417,7 +421,7 @@ class KonfAIAppTemplateWidget(QWidget):
         """
         Open configuration file when user clicks "Open config" button.
         """
-        _, inference_file_path, _ = self.ui.modelComboBox.currentData.download(0)
+        _, inference_file_path, _ = self.ui.modelComboBox.currentData.download_inference(0)
         QDesktopServices.openUrl(QUrl.fromLocalFile(Path(inference_file_path).parent))
 
     def on_add_model(self):
@@ -515,9 +519,6 @@ class KonfAIAppTemplateWidget(QWidget):
         if hasattr(self.logic, "logCallback") and self.logic.logCallback:
             self.logic.logCallback(f"Fine-tune folder created: {target}")
 
-    def has_uncertainty_file(self):
-        return self._work_dir and any((self._work_dir / "Uncertainty").rglob("*.mha"))
-
     def get_work_dir(self) -> Path | None:
         return self._work_dir
     
@@ -541,6 +542,8 @@ class KonfAIAppTemplateWidget(QWidget):
         Run processing when user clicks "Apply" button.
         """
         if not self.is_running():
+            self.remove_work_dir()
+            self._work_dir = Path(slicer.util.tempDirectory())
             self.set_running(True)
             self._update_logs("Processing started.", True)
             self._update_progress(0, "0 it/s")
@@ -589,48 +592,38 @@ class KonfAIAppTemplateWidget(QWidget):
         slicer.cli.runSync(slicer.modules.resamplescalarvectordwivolume, None, params)
 
 
-        dataset_p = self._work_dir / "Dataset" / "P001"
-        dataset_p.mkdir(parents=True, exist_ok=True)
         volumeStorageNode = slicer.mrmlScene.CreateNodeByClass("vtkMRMLVolumeArchetypeStorageNode")
-        volumeStorageNode.SetFileName(str(dataset_p / "Output.mha"))
+        volumeStorageNode.SetFileName(str(self._work_dir / "Volume.mha"))
         volumeStorageNode.UseCompressionOff()
         volumeStorageNode.WriteData(outputNode)
         volumeStorageNode.UnRegister(None)
 
-        dataset_p = self._work_dir / "Dataset" / "P001"
-        dataset_p.mkdir(parents=True, exist_ok=True)
         volumeStorageNode = slicer.mrmlScene.CreateNodeByClass("vtkMRMLVolumeArchetypeStorageNode")
-        volumeStorageNode.SetFileName(str(dataset_p / "Reference.mha"))
+        volumeStorageNode.SetFileName(str(self._work_dir / "Reference.mha"))
         volumeStorageNode.UseCompressionOff()
         volumeStorageNode.WriteData(self.ui.referenceVolumeSelector.currentNode())
         volumeStorageNode.UnRegister(None)
-
-        if not self.ui.referenceMaskSelector.currentNode() or not self.ui.referenceMaskSelector.currentNode().GetImageData():
-            refVolume = self.ui.referenceVolumeSelector.currentNode()
-            refImage = refVolume.GetImageData()
-            maskImage = vtk.vtkImageData()
-            maskImage.DeepCopy(refImage)
-            maskImage.GetPointData().GetScalars().Fill(1)
-
-            maskVolume = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLScalarVolumeNode", "Mask")
-            maskVolume.SetAndObserveImageData(maskImage)
-            mat = vtk.vtkMatrix4x4()
-            refVolume.GetIJKToRASMatrix(mat)
-            maskVolume.SetIJKToRASMatrix(mat)
-            maskVolume.SetSpacing(refVolume.GetSpacing())
-        else:
-            maskVolume = self.ui.referenceMaskSelector.currentNode()
-
-        maskStorage = slicer.mrmlScene.CreateNodeByClass("vtkMRMLVolumeArchetypeStorageNode")
-        maskStorage.SetFileName(str(dataset_p / "Mask.mha"))
-        maskStorage.UseCompressionOff()
-        maskStorage.WriteData(maskVolume)
-        maskStorage.UnRegister(None)
+        
+        model: ModelHF = self.ui.modelComboBox.currentData
 
         args = [
-            "EVALUATION",
-            "-y",
+            "eval",
+            f"{model.repo_id}:{model.model_name}",
+            "-i", 
+            "Volume.mha",
+            "--gt",
+            "Reference.mha",
+            "-o",
+            "Evaluation",
         ]
+        if self.ui.referenceMaskSelector.currentNode() and self.ui.referenceMaskSelector.currentNode().GetImageData():
+            maskStorage = slicer.mrmlScene.CreateNodeByClass("vtkMRMLVolumeArchetypeStorageNode")
+            maskStorage.SetFileName("Mask.mha")
+            maskStorage.UseCompressionOff()
+            maskStorage.WriteData(self.ui.referenceMaskSelector.currentNode())
+            maskStorage.UnRegister(None)
+            args += ["--mask", "Mask.mha"]
+
         if self._parameterNode.GetParameter("Device") != "None":
             args += ["--gpu", self._parameterNode.GetParameter("Device")]
         else:
@@ -639,9 +632,9 @@ class KonfAIAppTemplateWidget(QWidget):
         def on_end_function() -> None:
             if self.process.exitStatus() != QProcess.NormalExit:
                 return
-            statistics = Statistics(str(self._work_dir / "Evaluations" / "Evaluation" / "Metric_TRAIN.json"))
+            statistics = Statistics((self._work_dir / "Evaluation").rglob("*.json").__next__())
             self.evaluationPanel.setMetrics(statistics.read()) 
-            self.evaluationPanel.refreshImagesList(self._work_dir / "Evaluation")
+            self.evaluationPanel.refreshImagesList(Path((self._work_dir / "Evaluation").rglob("*.mha").__next__().parent))
             self._update_logs("Processing finished.")
             self.set_running(False)
             
@@ -649,54 +642,57 @@ class KonfAIAppTemplateWidget(QWidget):
 
         
     def uncertainty(self):
-        self.uncertaintyPanel.refreshImagesList(self._work_dir / "Uncertainty")
+        self.uncertaintyPanel.clearImagesList()
         self.uncertaintyPanel.clearMetrics()
+        model: ModelHF = self.ui.modelComboBox.currentData
         args = [
-            "EVALUATION",
-            "-y",
-            "--config",
-            "Uncertainty.yml",
+            "uncertainty",
+            f"{model.repo_id}:{model.model_name}",
+            "-i", 
+            "Volume.mha",
+            "-o",
+            "Uncertainty",
         ]
+
         if self._parameterNode.GetParameter("Device") != "None":
             args += ["--gpu", self._parameterNode.GetParameter("Device")]
         else:
             args += ["--cpu", "1"]
 
+        image = sitkUtils.PullVolumeFromSlicer(self.ui.inputInferenceStackSelector.currentNode())
+        sitk.WriteImage(image, str(self._work_dir / "Volume.mha"))
+
         def on_end_function() -> None:
             if self.process.exitStatus() != QProcess.NormalExit:
                 return
-            statistics = Statistics(str(self._work_dir / "Evaluations" / "Uncertainty" / "Metric_TRAIN.json"))
+            statistics = Statistics((self._work_dir / "Uncertainty").rglob("*.json").__next__())
             self.uncertaintyPanel.setMetrics(statistics.read()) 
-            self.uncertaintyPanel.refreshImagesList(self._work_dir / "Uncertainty")
+            self.uncertaintyPanel.refreshImagesList(Path((self._work_dir / "Uncertainty").rglob("*.mha").__next__().parent))
             self._update_logs("Processing finished.")
             self.set_running(False)
 
         self.process.run(self._work_dir, args, on_end_function)
 
     def inference(self) -> None:
-        self.remove_work_dir()
-        self._work_dir = Path(slicer.util.tempDirectory())
-
-        self.set_running(True)
         model: ModelHF = self.ui.modelComboBox.currentData
         args = [
-            "PREDICTION_HF",
-            "-y",
-            "--MODEL",
+            "infer",
+            f"{model.repo_id}:{model.model_name}",
+            "-i", 
+            "Volume.mha",
+            "-o",
+            "Output",
+            "--ensemble",
             str(self.ui.ensembleSpinBox.value),
             "--tta",
             str(self.ui.ttaSpinBox.value),
-            "--config",
-            f"{model.repo_id}:{model.model_name}",
+            "--mc",
+            str(self.ui.mcDropoutSpinBox.value),
         ]
         if self._parameterNode.GetParameter("Device") != "None":
             args += ["--gpu", self._parameterNode.GetParameter("Device")]
         else:
             args += ["--cpu", "1"]
-
-        dataset_p = self._work_dir / "Dataset" / "P001"
-        dataset_p.mkdir(parents=True, exist_ok=True)
-
 
         inputNode = self.ui.inputVolumeSelector.currentNode()
 
@@ -706,16 +702,17 @@ class KonfAIAppTemplateWidget(QWidget):
         sitk_image.SetMetaData("NumberOfTTA", f"{self.ui.ttaSpinBox.value}")
         sitk_image.SetMetaData("NumberOfMCDropout", f"{self.ui.mcDropoutSpinBox.value}")
 
-        path = str(dataset_p / "Volume.mha")
-        sitk.WriteImage(sitk_image, path)
+        sitk.WriteImage(sitk_image, str(self._work_dir / "Volume.mha"))
 
-        self._update_logs(f"Input volume saved to temporary folder: {dataset_p}")
+        self._update_logs(f"Input volume saved to temporary folder: {self._work_dir / 'Volume.mha'}")
 
         def on_end_function() -> None:
             if self.process.exitStatus() != QProcess.NormalExit:
                 return
-
-            data, attr = image_to_data(sitk.ReadImage(str(list((self._work_dir / "Predictions").rglob("*.mha"))[0])))            
+            for file in list((self._work_dir / "Output").rglob("*.mha")):
+                if file.name != "InferenceStack.mha":    
+                    data, attr = image_to_data(sitk.ReadImage(str(file)))
+                    break
 
             self._update_logs("Loading result into Slicer...")
 
@@ -755,8 +752,8 @@ class KonfAIAppTemplateWidget(QWidget):
                     fit=True,
                     foregroundOpacity=0.5,
                 )
-            self.evaluationPanel.refreshImagesList(self._work_dir / "Evaluation") 
-            self.uncertaintyPanel.refreshImagesList(self._work_dir / "Uncertainty")
+            self.evaluationPanel.clearImagesList()
+            self.uncertaintyPanel.refreshImagesList(Path((self._work_dir / "Output").rglob("*.mha").__next__().parent))
 
             self._update_logs("Processing finished.")
             self.set_running(False)
