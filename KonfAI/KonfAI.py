@@ -192,7 +192,7 @@ class KonfAIAppTemplateWidget(QWidget):
                 model_names = get_available_models_on_hf_repo(konfai_repo)
             except RepositoryHFError as e:
                 slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
-            for model_name in get_available_models_on_hf_repo(konfai_repo):
+            for model_name in model_names:
                 try:
                     model = ModelHF(konfai_repo + ":" + model_name)
                     self.ui.modelComboBox.addItem(model.get_display_name(), model)
@@ -368,7 +368,9 @@ class KonfAIAppTemplateWidget(QWidget):
         self.ui.mcDropoutSpinBox.setMaximum(model._mc_dropout)
         has_evaluation, has_uncertainty = model.has_capabilities()
         self.ui.evaluationCollapsible.setEnabled(has_evaluation or has_uncertainty)
-        
+        if not has_evaluation and not has_uncertainty:
+            self.ui.evaluationCollapsible.collapsed = True
+
         self.ui.qaTabWidget.setTabEnabled(0, has_evaluation)
         self.ui.qaTabWidget.setTabEnabled(1, has_uncertainty)
 
@@ -574,6 +576,9 @@ class KonfAIAppTemplateWidget(QWidget):
     def evaluation(self):
         self.evaluationPanel.clearImagesList()
         self.evaluationPanel.clearMetrics()
+        self.evaluationPanel.clearMetrics()
+        self.uncertaintyPanel.clearImagesList()
+        
         if not self.ui.transformSelector.currentNode():
             newTransform = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLinearTransformNode", "IdentityTransform")
             self.ui.transformSelector.setCurrentNode(newTransform)
@@ -618,7 +623,7 @@ class KonfAIAppTemplateWidget(QWidget):
         ]
         if self.ui.referenceMaskSelector.currentNode() and self.ui.referenceMaskSelector.currentNode().GetImageData():
             maskStorage = slicer.mrmlScene.CreateNodeByClass("vtkMRMLVolumeArchetypeStorageNode")
-            maskStorage.SetFileName("Mask.mha")
+            maskStorage.SetFileName(str(self._work_dir / "Mask.mha"))
             maskStorage.UseCompressionOff()
             maskStorage.WriteData(self.ui.referenceMaskSelector.currentNode())
             maskStorage.UnRegister(None)
@@ -631,6 +636,7 @@ class KonfAIAppTemplateWidget(QWidget):
         
         def on_end_function() -> None:
             if self.process.exitStatus() != QProcess.NormalExit:
+                self.set_running(False)
                 return
             statistics = Statistics((self._work_dir / "Evaluation").rglob("*.json").__next__())
             self.evaluationPanel.setMetrics(statistics.read()) 
@@ -642,6 +648,8 @@ class KonfAIAppTemplateWidget(QWidget):
 
         
     def uncertainty(self):
+        self.evaluationPanel.clearImagesList()
+        self.evaluationPanel.clearMetrics()
         self.uncertaintyPanel.clearImagesList()
         self.uncertaintyPanel.clearMetrics()
         model: ModelHF = self.ui.modelComboBox.currentData
@@ -664,6 +672,7 @@ class KonfAIAppTemplateWidget(QWidget):
 
         def on_end_function() -> None:
             if self.process.exitStatus() != QProcess.NormalExit:
+                self.set_running(False)
                 return
             statistics = Statistics((self._work_dir / "Uncertainty").rglob("*.json").__next__())
             self.uncertaintyPanel.setMetrics(statistics.read()) 
@@ -708,6 +717,7 @@ class KonfAIAppTemplateWidget(QWidget):
 
         def on_end_function() -> None:
             if self.process.exitStatus() != QProcess.NormalExit:
+                self.set_running(False)
                 return
             for file in list((self._work_dir / "Output").rglob("*.mha")):
                 if file.name != "InferenceStack.mha":    
@@ -759,6 +769,12 @@ class KonfAIAppTemplateWidget(QWidget):
             self.set_running(False)
 
         self.process.run(self._work_dir, args, on_end_function)
+
+    def cleanup(self):
+        """
+        Called when the user closes the module and the widget is destroyed.
+        """
+        self.remove_work_dir()
 
 class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic):
 
@@ -860,8 +876,6 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
             self._updatingGUIFromParameterNode = True
             self._current_konfai_app.update_GUI_from_parameter_node()
             self._updatingGUIFromParameterNode = False
-
-            self._parameterNode.GetParameter("is_running")
             
             self.ui.openTempButton.setEnabled(self._current_konfai_app.get_work_dir() is not None)
 
@@ -959,6 +973,13 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         self.ui.progressBar.value = value
         self.ui.speedLabel.text = _("{speed}").format(speed=speed)
     
+    def cleanup(self):
+        """
+        Called when the application closes and the module widget is destroyed.
+        """
+        for konfai_app in self._konfai_apps.values():
+            konfai_app.cleanup()
+
 class KonfAIWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -983,6 +1004,7 @@ class KonfAIWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         Called when the application closes and the module widget is destroyed.
         """
         self.removeObservers()
+        self.konfai_core.cleanup()
 
     def enter(self):
         """
