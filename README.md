@@ -23,16 +23,16 @@ SlicerKonfAI provides two complementary QA modules that assess prediction reliab
   - Stochastic dropout  
   - Multi-model ensembling
 
-* **Tight integration with Slicer**
+### **• Tight integration with Slicer**
   Use volumes already loaded in Slicer (DICOM, NRRD, NIfTI, etc.) as inputs and write results back as:
 
   * Volume nodes (e.g. synthetic CT, logits, heatmaps)
   * Label maps / segmentation nodes (e.g. organ masks, tumor masks)
 
-* **Configurable Apps root**  
+### **• Configurable Apps root**  
   The workflows inside each App can be modified or extended (e.g., adding new evaluation metrics or custom processing steps), and SlicerKonfAI will automatically use the updated configuration.
 
-* **Built-in State-of-the-Art Apps**
+### **• Built-in State-of-the-Art Apps**
   By default, SlicerKonfAI includes several state-of-the-art KonfAI Apps for tasks such as anatomical segmentation and synthetic CT generation, providing ready-to-use baselines for experimentation and clinical evaluation.
 
 ---
@@ -124,3 +124,4 @@ Internally, SlicerKonfAI typically:
 > KonfAI = the engine that does all computations.
 
 ---
+
