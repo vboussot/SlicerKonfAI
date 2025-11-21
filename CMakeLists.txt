@@ -10,7 +10,7 @@ set(EXTENSION_CONTRIBUTORS "Valentin Boussot (University of Rennes, France)")
 set(EXTENSION_DESCRIPTION "An extension enabling fast and configurable deep learning inference in 3D Slicer using KonfAI models from the Hugging Face repository.")
 set(EXTENSION_ICONURL "https://raw.githubusercontent.com/vboussot/SlicerKonfAI/main/SlicerKonfAI.png")
 set(EXTENSION_SCREENSHOTURLS "")
-set(EXTENSION_DEPENDS "konfai==1.3.5")
+set(EXTENSION_DEPENDS "")
 
 #-----------------------------------------------------------------------------
 # Extension dependencies

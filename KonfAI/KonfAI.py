@@ -10,7 +10,23 @@ from slicer.i18n import translate
 from qt import (
     QIcon,
     QSize,
-    QWidget,QVBoxLayout,QTabWidget,QEventLoop,QTimer, QDesktopServices, QUrl, QListWidgetItem, Qt, QMenu, QCursor, QFont, QColor, QProcess
+    QWidget,
+    QVBoxLayout,
+    QTabWidget, 
+    QDesktopServices, 
+    QUrl, 
+    QListWidgetItem, 
+    Qt, 
+    QMenu, 
+    QCursor, 
+    QFont, 
+    QColor, 
+    QProcess, 
+    QInputDialog, 
+    QLineEdit, 
+    QMessageBox, 
+    QFileDialog, 
+    QSettings
 )
 import vtk
 import os
@@ -23,7 +39,7 @@ from konfai.utils.utils import ModelHF, RepositoryHFError, get_available_models_
 import numpy as np
 import sitkUtils
 from konfai.utils.dataset import image_to_data, get_infos
-            
+from abc import abstractmethod, ABC
 
 class KonfAI(ScriptedLoadableModule):
     """Uses ScriptedLoadableModule base class, available at:
@@ -147,7 +163,7 @@ class Process(QProcess):
     def on_stderr_ready(self):
         print("Error : ", self.readAllStandardError().data().decode().strip())
 
-    def run(self, work_dir: Path, args: list[str], on_end_function):
+    def run(self, command: str, work_dir: Path, args: list[str], on_end_function):
         self.setWorkingDirectory(str(work_dir))
         try:
             self.finished.disconnect()
@@ -155,35 +171,110 @@ class Process(QProcess):
             pass
         self.finished.connect(on_end_function)
 
-        self.start("konfai-apps", args)
+        self.start(command, args)
     
     def stop(self):
         self.kill()
         self.waitForFinished(-1)
 
 
-class KonfAIAppTemplateWidget(QWidget):
+class AppTemplateWidget(QWidget):
 
-    def __init__(self, name: str, konfai_repo_list: list[str]):
+    def __init__(self, name: str, ui_widget):
         super().__init__()
-        self.name = name
-        self.proc = None
+        self._process = None
         self._update_logs = None
         self._update_progress = None
         self._parameterNode = None
         self._work_dir = None
+        self.name = name
 
-        ui_widget = slicer.util.loadUI(resourcePath("UI/KonfAIAppTemplate.ui")) 
         self.setLayout(QVBoxLayout())
         self.layout().addWidget(ui_widget)
         self.ui = slicer.util.childWidgetVariables(ui_widget)
 
+        ui_widget.setMRMLScene(slicer.mrmlScene)
+
+    def app_setup(self, update_logs, update_progress, parameterNode):
+        self._update_logs = update_logs
+        self._update_progress = update_progress
+        self._parameterNode = parameterNode
+        self.process = Process(update_logs, update_progress)
+
+    def get_work_dir(self) -> Path | None:
+        return self._work_dir
+    
+    def create_new_work_dir(self):
+        self._work_dir = Path(slicer.util.tempDirectory())
+    
+    def remove_work_dir(self):
+        if self._work_dir and self._work_dir.exists():
+            shutil.rmtree(self._work_dir)
+            self._work_dir = None
+    
+    def is_running(self) -> bool:
+        return self._parameterNode.GetParameter("is_running") == "True"
+    
+    def set_running(self, state: bool) -> None:
+        self._parameterNode.SetParameter("is_running", str(state))
+
+    def on_run_button(self, function):
+        """
+        Run processing when user clicks "Apply" button.
+        """
+        if not self.is_running():
+            self.remove_work_dir()
+            self.create_new_work_dir()
+            self.set_running(True)
+            self._update_logs("Processing started.", True)
+            self._update_progress(0, "0 it/s")
+            try:
+                function()
+            except Exception as e:
+                print(e)
+                self.set_running(False)
+        else:
+            self.set_running(False)
+            self.process.stop()
+            import time
+            time.sleep(3)
+    
+    def cleanup(self):
+        """
+        Called when the user closes the module and the widget is destroyed.
+        """
+        self.remove_work_dir()
+    
+    @abstractmethod
+    def initialize_parameter_node(self):
+        pass
+    
+    @abstractmethod
+    def initialize_GUI_from_parameter_node(self):
+        pass
+
+    @abstractmethod
+    def update_GUI_from_parameter_node(self):
+        pass
+
+    @abstractmethod
+    def update_parameter_node_from_GUI(self, caller=None, event=None):
+        pass
+
+    def enter(self):
+        self.initialize_parameter_node()
+        self.initialize_GUI_from_parameter_node()
+        self.update_GUI_from_parameter_node()
+
+class KonfAIAppTemplateWidget(AppTemplateWidget):
+
+    def __init__(self, name: str, konfai_repo_list: list[str]):
+        super().__init__(name, slicer.util.loadUI(resourcePath("UI/KonfAIAppTemplate.ui")))
+        
         self.evaluationPanel = KonfAIMetricsPanel()
         self.ui.withRefMetricsPlaceholder.layout().addWidget(self.evaluationPanel)
         self.uncertaintyPanel = KonfAIMetricsPanel()
         self.ui.noRefMetricsPlaceholder.layout().addWidget(self.uncertaintyPanel)
-
-        ui_widget.setMRMLScene(slicer.mrmlScene)
 
         self.description_expanded = False
         for konfai_repo in konfai_repo_list:
@@ -247,16 +338,9 @@ class KonfAIAppTemplateWidget(QWidget):
 
         self.update_parameter_node_from_GUI()
 
-    def konfai_app_setup(self, update_logs, update_progress, parameterNode):
-        self._update_logs = update_logs
-        self._update_progress = update_progress
-        self._parameterNode = parameterNode
-        self.process = Process(update_logs, update_progress)
-        
+    
     def enter(self):
-        self.initialize_parameter_node()
-        self.initialize_GUI_from_parameter_node()
-        self.update_GUI_from_parameter_node()
+        super().enter()
         self.on_model_selected()
 
     def initialize_parameter_node(self):
@@ -424,6 +508,8 @@ class KonfAIAppTemplateWidget(QWidget):
         Open configuration file when user clicks "Open config" button.
         """
         _, inference_file_path, _ = self.ui.modelComboBox.currentData.download_inference(0)
+        #self.ui.modelComboBox.currentData.download_evaluation()
+        #self.ui.modelComboBox.currentData.download_uncertainty()
         QDesktopServices.openUrl(QUrl.fromLocalFile(Path(inference_file_path).parent))
 
     def on_add_model(self):
@@ -434,17 +520,18 @@ class KonfAIAppTemplateWidget(QWidget):
         chosen = m.exec_(QCursor.pos())
         if chosen is None:
             return
-        """if chosen is act_folder:
+        if chosen is act_folder:
             self.on_add_folder()
         elif chosen is act_hf:
             self.on_add_hf()
         elif chosen is act_ft:
-            self.on_add_ft()"""
+            self.on_add_ft()
 
     def on_add_folder(self):
         model_dir = QFileDialog.getExistingDirectory(None, "Select Model Folder", os.path.expanduser("~"))
         if not model_dir:
             return
+
         if model_dir + ":None" in self.models:
             QMessageBox.information(None, "Info", f"This name {model_dir} is already in the list.")
         try:
@@ -466,23 +553,74 @@ class KonfAIAppTemplateWidget(QWidget):
         self.ui.modelComboBox.addItem(model.get_display_name(), model_dir + ":None")
         self.ui.modelComboBox.setCurrentIndex(self.ui.modelComboBox.findData(model_dir + ":None"))
 
-    def on_add_hf(self):
-        text = QInputDialog.getText(
-            None, "Add from Hugging Face", "Enter repo id (e.g. org/model or org/model@rev):", QLineEdit.Normal
-        )
-        if not text.strip():
-            return
-        repo_id = text.strip()
-        try:
-            from huggingface_hub import HfApi
+    def ask_subdir(self, dirs):
+        dlg = QInputDialog()
+        dlg.setWindowTitle("Select subdirectory")
+        dlg.setLabelText("Choose a directory:")
+        dlg.setComboBoxItems(dirs)
+        dlg.setOption(QInputDialog.UseListViewForComboBoxItems)
 
-            api = HfApi()
-            try:
-                api.model_info(repo_id.split("@")[0])  
-            except Exception:
-                api.dataset_info(repo_id.split("@")[0]) 
-        except Exception:
-            pass
+        if dlg.exec_() != dlg.Accepted:
+            return None
+
+        return dlg.textValue()
+
+
+    def on_add_hf(self):
+        from huggingface_hub import HfApi
+        text = QInputDialog().getText(
+            self,
+            "Add from Hugging Face",
+            "Enter repo id (e.g. VBoussot/ImpactSynth):",
+            QLineEdit.Normal,
+        )
+        repo_id = text.strip()
+        if not repo_id:
+            return
+        
+        api = HfApi()
+        base_repo_id, _, revision = repo_id.partition("@")
+
+        files = None
+        try:
+            files = api.list_repo_files(
+                repo_id=base_repo_id,
+                revision=revision or None,
+                repo_type="model",
+            )
+        except:
+            QMessageBox.critical(
+                None,
+                "Hugging Face",
+                f"Repository '{repo_id}' does not exist on Hugging Face."
+            )
+            return
+        dirs = sorted({path.split("/")[0] for path in files if "/" in path})
+        model_name = self.ask_subdir(
+            dirs,
+            )
+        if model_name:
+            from konfai.utils.utils import is_model_repo
+            state, error, _ = is_model_repo(repo_id, model_name)
+            if not state:
+                QMessageBox.critical(
+                    None,
+                    "Model",
+                    error
+                )
+            model = ModelHF(repo_id + ":" + model_name)
+
+            items = [self.ui.modelComboBox.itemText(i) for i in range(self.ui.modelComboBox.count)]
+            if model.get_display_name() in items:
+                QMessageBox.critical(
+                    None,
+                    "Model already listed",
+                    f"The model \"{model_name}\" is already in the list."
+                )
+                return
+            
+            self.ui.modelComboBox.addItem(model.get_display_name(), model)
+            self.ui.modelComboBox.setCurrentIndex(self.ui.modelComboBox.findData(model))
 
     def on_add_ft(self):
         # Choisir le dossier parent
@@ -521,49 +659,10 @@ class KonfAIAppTemplateWidget(QWidget):
         if hasattr(self.logic, "logCallback") and self.logic.logCallback:
             self.logic.logCallback(f"Fine-tune folder created: {target}")
 
-    def get_work_dir(self) -> Path | None:
-        return self._work_dir
-    
-    def remove_work_dir(self):
-        if self._work_dir and self._work_dir.exists():
-            shutil.rmtree(self._work_dir)
-            self._work_dir = None
-    
-    def is_running(self) -> bool:
-        return self._parameterNode.GetParameter("is_running") == "True"
-    
-    def set_running(self, state: bool) -> None:
-        self._parameterNode.SetParameter("is_running", str(state))
-
 
     def on_tab_changed(self):
         self.update_GUI_from_parameter_node()
 
-    def on_run_button(self, function):
-        """
-        Run processing when user clicks "Apply" button.
-        """
-        if not self.is_running():
-            self.remove_work_dir()
-            self._work_dir = Path(slicer.util.tempDirectory())
-            self.set_running(True)
-            self._update_logs("Processing started.", True)
-            self._update_progress(0, "0 it/s")
-            try:
-                function()
-            except Exception as e:
-                print(e)
-                self.set_running(False)
-        else:
-            self.ui.runInferenceButton.setEnabled(False)
-            self.ui.runEvaluationButton.setEnabled(False) 
-
-            self.set_running(False)
-            self.process.stop()
-            import time
-            time.sleep(3)
-            self.ui.runInferenceButton.setEnabled(True)
-            self.ui.runEvaluationButton.setEnabled(True) 
 
             
     def on_run_inference_button(self):
@@ -575,8 +674,6 @@ class KonfAIAppTemplateWidget(QWidget):
 
     def evaluation(self):
         self.evaluationPanel.clearImagesList()
-        self.evaluationPanel.clearMetrics()
-        self.evaluationPanel.clearMetrics()
         self.uncertaintyPanel.clearImagesList()
         
         if not self.ui.transformSelector.currentNode():
@@ -622,12 +719,25 @@ class KonfAIAppTemplateWidget(QWidget):
             "Evaluation",
         ]
         if self.ui.referenceMaskSelector.currentNode() and self.ui.referenceMaskSelector.currentNode().GetImageData():
+            outputNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLScalarVolumeNode", self.ui.referenceMaskSelector.currentNode().GetName() + "_toRef")
+            params = {
+                "inputVolume": self.ui.referenceMaskSelector.currentNode().GetID(),
+                "referenceVolume": self.ui.referenceVolumeSelector.currentNode().GetID(),
+                "outputVolume": outputNode.GetID(),
+                "interpolationType": "nn", 
+                "warpTransform": self.ui.transformSelector.currentNode().GetID(),
+            }
+
+            slicer.cli.runSync(slicer.modules.resamplescalarvectordwivolume, None, params)
+            
             maskStorage = slicer.mrmlScene.CreateNodeByClass("vtkMRMLVolumeArchetypeStorageNode")
             maskStorage.SetFileName(str(self._work_dir / "Mask.mha"))
             maskStorage.UseCompressionOff()
-            maskStorage.WriteData(self.ui.referenceMaskSelector.currentNode())
+            maskStorage.WriteData(outputNode)
             maskStorage.UnRegister(None)
+
             args += ["--mask", "Mask.mha"]
+
 
         if self._parameterNode.GetParameter("Device") != "None":
             args += ["--gpu", self._parameterNode.GetParameter("Device")]
@@ -644,7 +754,7 @@ class KonfAIAppTemplateWidget(QWidget):
             self._update_logs("Processing finished.")
             self.set_running(False)
             
-        self.process.run(self._work_dir, args, on_end_function)
+        self.process.run("konfai-apps", self._work_dir, args, on_end_function)
 
         
     def uncertainty(self):
@@ -680,7 +790,7 @@ class KonfAIAppTemplateWidget(QWidget):
             self._update_logs("Processing finished.")
             self.set_running(False)
 
-        self.process.run(self._work_dir, args, on_end_function)
+        self.process.run("konfai-apps", self._work_dir, args, on_end_function)
 
     def inference(self) -> None:
         model: ModelHF = self.ui.modelComboBox.currentData
@@ -768,13 +878,9 @@ class KonfAIAppTemplateWidget(QWidget):
             self._update_logs("Processing finished.")
             self.set_running(False)
 
-        self.process.run(self._work_dir, args, on_end_function)
+        self.process.run("konfai-apps", self._work_dir, args, on_end_function)
 
-    def cleanup(self):
-        """
-        Called when the user closes the module and the widget is destroyed.
-        """
-        self.remove_work_dir()
+
 
 class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic):
 
@@ -788,7 +894,7 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         
         self._parameterNode = None
         self._updatingGUIFromParameterNode = False
-        self._konfai_apps = {}
+        self._apps = {}
         self._current_konfai_app = None
         
         ui_widget = slicer.util.loadUI(resourcePath("UI/KonfAICore.ui")) 
@@ -817,11 +923,11 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         
         self.update_logs("", True)        
 
-    def register_konfai_apps(self, konfai_apps: list[QWidget]):
-        if len(konfai_apps) > 1:
+    def register_apps(self, apps: list[AppTemplateWidget]):
+        if len(apps) > 1:
             tabWidget = QTabWidget()
-            for konfai_app in konfai_apps:
-                tabWidget.addTab(konfai_app, konfai_app.name)
+            for app in apps:
+                tabWidget.addTab(app, app.name)
                 
             def on_tab_changed(self):
                 tabWidget.currentWidget().enter()
@@ -830,16 +936,16 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
             
             self.KonfAICoreWidget.layout().insertWidget(1, tabWidget)
         else:
-            konfai_app = konfai_apps[0]
-            self.KonfAICoreWidget.layout().insertWidget(1, konfai_app)
+            app = apps[0]
+            self.KonfAICoreWidget.layout().insertWidget(1, app)
                     
-        for konfai_app in konfai_apps:
-            self._konfai_apps[konfai_app.name] = konfai_app
-            konfai_app.konfai_app_setup(self.update_logs, self.update_progress, self._parameterNode)
+        for app in apps:
+            self._apps[app.name] = app
+            app.app_setup(self.update_logs, self.update_progress, self._parameterNode)
 
-        konfai_app = next(iter(self._konfai_apps.values()))
-        self._current_konfai_app = konfai_app
-        konfai_app.enter()
+        app = next(iter(self._apps.values()))
+        self._current_konfai_app = app
+        app.enter()
 
 
     def initializeParameterNode(self):
@@ -917,7 +1023,7 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
     
     def on_device_changed(self):
         self._update_VRAM()
-        self._parameterNode.SetParameter("Device", self.ui.deviceComboBox.currentData)
+        self._parameterNode.SetParameter("Device", self.ui.deviceComboBox.currentData if self.ui.deviceComboBox.currentData else "None")
 
     def on_open_work_dir(self):
         """
@@ -932,6 +1038,20 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         total_GB = ram.total / (1024**3)
         self.ui.ramLabel.text = _("RAM used: {used:.1f} GB / {total:.1f} GB").format(used=used_GB, total=total_GB)
         self.ui.ramProgressBar.value = used_GB / total_GB * 100
+
+        if used_GB / total_GB * 100 > 80:
+            self.ui.ramProgressBar.setStyleSheet("""
+                QProgressBar::chunk {
+                    background-color: #e74c3c;
+                }
+            """)
+        else:
+            # Vert
+            self.ui.ramProgressBar.setStyleSheet("""
+                QProgressBar::chunk {
+                    background-color: #2ecc71; 
+                }
+            """)
     
     def _update_VRAM(self):
         """Update VRAM usage display"""
@@ -951,6 +1071,21 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
                     used=used_GB, total=total_GB
                 )
                 self.ui.gpuProgressBar.value = used_GB / total_GB * 100
+            
+                if used_GB / total_GB * 100 > 80:
+                    self.ui.gpuProgressBar.setStyleSheet("""
+                        QProgressBar::chunk {
+                            background-color: #e74c3c;
+                        }
+                    """)
+                else:
+                    # Vert partout
+                    self.ui.gpuProgressBar.setStyleSheet("""
+                        QProgressBar::chunk {
+                            background-color: #2ecc71;
+                        }
+                    """)
+
             except Exception as e:
                 self.ui.gpuLabel.text = _("VRAM used: n/a")
         else:
@@ -977,8 +1112,8 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         """
         Called when the application closes and the module widget is destroyed.
         """
-        for konfai_app in self._konfai_apps.values():
-            konfai_app.cleanup()
+        for app in self._apps.values():
+            app.cleanup()
 
 class KonfAIWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
@@ -996,7 +1131,7 @@ class KonfAIWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         ScriptedLoadableModuleWidget.setup(self)
         self.konfai_core = KonfAICoreWidget("KonfAI")
         predictionWidget = KonfAIAppTemplateWidget("Inference", ["VBoussot/ImpactSynth", "VBoussot/MRSegmentator-KonfAI"])
-        self.konfai_core.register_konfai_apps([predictionWidget])
+        self.konfai_core.register_apps([predictionWidget])
         self.layout.addWidget(self.konfai_core)
         
     def cleanup(self):
