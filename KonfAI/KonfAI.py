@@ -1,49 +1,74 @@
-from platform import node
-import pynvml
 import slicer
-import psutil
+
+try:
+    from konfai.evaluator import Statistics
+except ImportError:
+    # Install KonfAI inside Slicer if it is not available yet
+    slicer.util.pip_install("konfai==1.4.0")
+    from konfai.evaluator import Statistics
+
 import itertools
-from slicer.ScriptedLoadableModule import ScriptedLoadableModuleWidget, ScriptedLoadableModule, ScriptedLoadableModuleLogic
-from slicer.util import VTKObservationMixin
-from slicer.i18n import tr as _
-from slicer.i18n import translate
-from qt import (
-    QIcon,
-    QSize,
-    QWidget,
-    QVBoxLayout,
-    QTabWidget, 
-    QDesktopServices, 
-    QUrl, 
-    QListWidgetItem, 
-    Qt, 
-    QMenu, 
-    QCursor, 
-    QFont, 
-    QColor, 
-    QProcess, 
-    QInputDialog, 
-    QLineEdit, 
-    QMessageBox, 
-    QFileDialog, 
-    QSettings
-)
-import vtk
+import json
 import os
-import SimpleITK as sitk
-from pathlib import Path
 import re
 import shutil
-from konfai.evaluator import Statistics
-from konfai.utils.utils import ModelHF, RepositoryHFError, get_available_models_on_hf_repo
+from abc import abstractmethod
+from pathlib import Path
+from typing import Any
+
 import numpy as np
+import psutil
+import pynvml
+import SimpleITK as sitk  # noqa: N813
 import sitkUtils
-from konfai.utils.dataset import image_to_data, get_infos
-from abc import abstractmethod, ABC
+import vtk
+from konfai.utils.dataset import get_infos, image_to_data
+from konfai.utils.utils import (
+    AppDirectoryError,
+    AppRepositoryHFError,
+    ModelDirectory,
+    ModelHF,
+    get_available_models_on_hf_repo,
+)
+from qt import (
+    QCheckBox,
+    QCursor,
+    QDesktopServices,
+    QFileDialog,
+    QFont,
+    QIcon,
+    QInputDialog,
+    QLineEdit,
+    QListWidgetItem,
+    QMenu,
+    QMessageBox,
+    QProcess,
+    QSettings,
+    QSize,
+    Qt,
+    QTabWidget,
+    QUrl,
+    QVBoxLayout,
+    QWidget,
+)
+from slicer.i18n import tr as _
+from slicer.i18n import translate
+from slicer.ScriptedLoadableModule import (
+    ScriptedLoadableModule,
+    ScriptedLoadableModuleLogic,
+    ScriptedLoadableModuleWidget,
+)
+from slicer.util import VTKObservationMixin
+from torch.cuda import device_count, get_device_name, is_available
+
 
 class KonfAI(ScriptedLoadableModule):
-    """Uses ScriptedLoadableModule base class, available at:
-    https://github.com/Slicer/Slicer/blob/main/Base/Python/slicer/ScriptedLoadableModule.py
+    """
+    Main Slicer module class for KonfAI.
+
+    This class is responsible for registering the module in 3D Slicer,
+    providing metadata (name, category, help text, acknowledgements, etc.),
+    and making the module discoverable from the Slicer module list.
     """
 
     def __init__(self, parent):
@@ -54,175 +79,394 @@ class KonfAI(ScriptedLoadableModule):
         self.parent.contributors = [
             "Valentin Boussot (University of Rennes, France)",
         ]
+        # Short help text shown in the module panel
         self.parent.helpText = _(
-            """SlicerKonfAI enables fast and configurable deep learning inference directly within 3D Slicer,
-                using pretrained <b>KonfAI</b> models hosted on Hugging Face.
-
-                You can:
-                <ul>
-                <li>Load a pretrained model from Hugging Face or a local directory.</li>
-                <li>Apply deep learning inference on images.</li>
-                <li>Evaluate predictions against a reference image or label map.</li>
-                <li>Compute uncertainty maps for model predictions.</li>
-                <li>Use GPU acceleration for real-time inference.</li>
-                <li>Export predictions and evaluation results.</li>
-                </ul>
-
-                This module is designed for research and prototyping using the KonfAI framework.
-                For more information, visit the <a href="https://github.com/vboussot/KonfAI">KonfAI repository</a>.
-                """
-
+            "<p>"
+            "SlicerKonfAI is a 3D Slicer module that lets you run KonfAI Apps directly inside Slicer."
+            "</p>"
+            "<p>"
+            "You can:<br>"
+            "&bull; Discover and download KonfAI Apps hosted on Hugging Face<br>"
+            "&bull; Run fast GPU-accelerated inference on volumes already loaded in Slicer<br>"
+            "&bull; Automatically export/import data (DICOM, NRRD, NIfTI, etc.) as volumes or segmentations<br>"
+            "&bull; Perform Quality Assurance (QA) using reference-based metrics or reference-free uncertainty "
+            "estimation (TTA, MC dropout, multi-model ensembling)"
+            "</p>"
+            "<p>"
+            "Each KonfAI App is a self-contained workflow "
+            "(Prediction/Evaluation/Uncertainty YAML configs + trained model) "
+            "that can be executed identically from Python, the CLI, or this Slicer module."
+            "</p>"
+            "<p><b>In short:</b><br>"
+            "SlicerKonfAI = GUI + data exchange + process manager<br>"
+            "KonfAI      = computation engine for training, inference, and evaluation."
+            "</p>"
         )
+
+        # Acknowledgment text (displayed in the About section)
         self.parent.acknowledgementText = _(
-            """
-This module was originally developed by Valentin Boussot (University of Rennes, France).
-It integrates the KonfAI deep learning framework for medical image.
-
-If you use KonfAI in your research, please cite the following work:  
-Boussot V., Dillenseger J.-L.:  
-<b>KonfAI: A Modular and Fully Configurable Framework for Deep Learning in Medical Imaging.</b>  
-<a href="https://arxiv.org/abs/2508.09823">https://arxiv.org/abs/2508.09823</a>
-"""
+            "<p>This module was originally developed by Valentin Boussot "
+            "(University of Rennes, France).<br>"
+            "It integrates the KonfAI deep learning framework for medical imaging.</p>"
+            "<p>If you use KonfAI in your research, please cite the following work:<br>"
+            "Boussot V., Dillenseger J.-L.:<br>"
+            "<b>KonfAI: A Modular and Fully Configurable Framework for Deep Learning in Medical Imaging.</b><br>"
+            '<a href="https://arxiv.org/abs/2508.09823">https://arxiv.org/abs/2508.09823</a>'
+            "</p>"
         )
 
-def resourcePath(filename):
-    """Return the absolute path of the module ``Resources`` directory."""
-    scriptedModulesPath = os.path.dirname(slicer.modules.konfai.path)
-    return os.path.join(scriptedModulesPath, "Resources", filename)
+
+def resource_path(filename: str) -> str:
+    """
+    Return the absolute path of a file located in the module's `Resources` directory.
+
+    Parameters
+    ----------
+    filename : str
+        File name relative to the `Resources` directory.
+
+    Returns
+    -------
+    str
+        Absolute path to the requested resource file.
+    """
+    scripted_modules_path = os.path.dirname(slicer.modules.konfai.path)
+    return os.path.join(scripted_modules_path, "Resources", filename)
+
 
 class KonfAIMetricsPanel(QWidget):
+    """
+    Metrics panel widget for KonfAI QA.
+
+    This panel displays metrics computed during evaluation or uncertainty analysis,
+    and allows the user to quickly load and visualize corresponding images / volumes
+    in the Slicer scene.
+    """
 
     def __init__(self):
         super().__init__()
-        ui_widget = slicer.util.loadUI(resourcePath("UI/KonfAIMetricsPanel.ui"))
+
+        # Load the associated .ui file and attach it to this widget
+        ui_widget = slicer.util.loadUI(resource_path("UI/KonfAIMetricsPanel.ui"))
         self.setLayout(QVBoxLayout())
         self.layout().addWidget(ui_widget)
         self.ui = slicer.util.childWidgetVariables(ui_widget)
-        self.ui.imagesListWidget.itemClicked.connect(self.onImageClicked)
 
-    def clearMetrics(self):
+        # Connect the image list widget to the click event handler
+        self.ui.imagesListWidget.itemClicked.connect(self.on_image_clicked)
+
+    def clear_metrics(self) -> None:
+        """
+        Clear the metrics list so no values are displayed in the panel.
+        """
         self.ui.metricsListWidget.clear()
 
-    def addMetric(self, key, value):
+    def add_metric(self, key: str, value: float) -> None:
+        """
+        Add a single metric to the metrics list.
+
+        Parameters
+        ----------
+        key : str
+            Metric name, for example "Dice" or "MAE".
+        value : float
+            Metric value to be displayed.
+        """
+        # Format metric in an aligned and compact way using a monospace font
         text = f"{key:<15} : {value:.4g}"
         item = QListWidgetItem(text)
         font = QFont("Courier New", 10)
         item.setFont(font)
-        item.setForeground(QColor("#111"))
         self.ui.metricsListWidget.addItem(item)
 
-    def setMetrics(self, metrics: dict[str, float]):
-        self.clearMetrics()
+    def set_metrics(self, metrics: dict[str, float]) -> None:
+        """
+        Replace the entire metric list with the metrics provided in `metrics`.
+
+        Parameters
+        ----------
+        metrics : dict[str, float]
+            Mapping between metric names and values.
+        """
+        self.clear_metrics()
         for key, value in metrics.items():
-            self.addMetric(key, value)
+            self.add_metric(key, value)
 
-    def onImageClicked(self):
+    def on_image_clicked(self) -> None:
+        """
+        Handle click on an image item in the list.
+
+        Loads the corresponding volume from disk into Slicer,
+        attaches metadata as node attributes, and sets it as the background volume
+        in the slice viewers.
+        """
         item = self.ui.imagesListWidget.currentItem()
-        fullPath = item.data(Qt.UserRole)
-        volumeNode = slicer.util.loadVolume(fullPath)
-        _, attr = get_infos(fullPath)
+        if not item:
+            return
+
+        full_path = item.data(Qt.UserRole)
+        if not full_path:
+            return
+
+        # Load the volume node from disk
+        volume_node = slicer.util.loadVolume(full_path)
+
+        # Extract KonfAI-related metadata from the image file and attach them as node attributes
+        _, attr = get_infos(full_path)
         for key, value in attr.items():
-            volumeNode.SetAttribute(key.split("_")[0], str(value))
-        slicer.util.setSliceViewerLayers(background=volumeNode)
+            # Keep only the part before '_' to have simple attribute keys
+            volume_node.SetAttribute(key.split("_")[0], str(value))
 
-    def clearImagesList(self):
+        # Make the loaded volume visible in Slicer's slice views
+        slicer.util.setSliceViewerLayers(background=volume_node)
+
+    def clear_images_list(self) -> None:
+        """
+        Clear the list of image entries displayed in the panel.
+        """
         self.ui.imagesListWidget.clear()
 
-    def refreshImagesList(self, path: Path):
+    def refresh_images_list(self, path: Path) -> None:
+        """
+        Populate the image list widget with all .mha files found under `path`.
+
+        Parameters
+        ----------
+        path : Path
+            Directory in which to recursively search for .mha images.
+        """
         self.ui.imagesListWidget.clear()
-        for filename in sorted(list(path.rglob("*.mha"))):
+        for filename in sorted(path.rglob("*.mha")):
             item = QListWidgetItem(filename.name)
             item.setFont(QFont("Arial", 10))
-            item.setForeground(QColor("#222"))
+            # Store full path in the item for later retrieval in `on_image_clicked`
             item.setData(Qt.UserRole, str(filename))
             self.ui.imagesListWidget.addItem(item)
 
+
 class Process(QProcess):
+    """
+    Thin wrapper around QProcess to handle KonfAI CLI processes.
+
+    Responsibilities:
+      - Forward stdout lines to the GUI log callback
+      - Parse progress and speed from stdout and update the progress bar
+      - Forward stderr lines to the console for debugging
+    """
 
     def __init__(self, _update_logs, _update_progress):
         super().__init__(self)
         self.readyReadStandardOutput.connect(self.on_stdout_ready)
         self.readyReadStandardError.connect(self.on_stderr_ready)
 
+        # Callbacks defined by the KonfAI core widget
         self._update_logs = _update_logs
         self._update_progress = _update_progress
 
-    def on_stdout_ready(self):
+    def on_stdout_ready(self) -> None:
+        """
+        Handle new data available on the standard output.
+
+        This method:
+          - Normalizes line endings
+          - Forwards the message to the log window
+          - Extracts numerical progress (0–100 %) and speed (e.g., '5 it/s')
+            from the log line when present, and forwards them to the UI.
+        """
         line = self.readAllStandardOutput().data().decode().strip()
         if line:
-            line = line.replace('\r\n', '\n').split('\r')[-1]
+            # Keep only the last sub-line if carriage returns are used for progress overwrite
+            line = line.replace("\r\n", "\n").split("\r")[-1]
 
+            # Forward to the log callback
             self._update_logs(line)
+
+            # Parse progress percentage if present (e.g., " 45% 123/456")
             m = re.search(r"\b(\d{1,3})%(?=\s+\d+/\d+)", line)
+            # Parse speed pattern if present (e.g., "5.2 it/s" or "0.21 s/it")
             speed = re.search(r"([\d.]+)\s*(it/s|s/it)", line)
+
             if m:
                 pct = int(m.group(1))
-            if speed:
+            else:
+                pct = None
+
+            if speed and pct is not None:
+                # Notify UI of updated progress and speed
                 self._update_progress(pct, speed.group(1) + " " + speed.group(2))
-    
-    def on_stderr_ready(self):
+
+    def on_stderr_ready(self) -> None:
+        """
+        Handle new data available on the standard error stream.
+
+        Currently we simply print the content to the Python console for debugging.
+        """
         print("Error : ", self.readAllStandardError().data().decode().strip())
 
-    def run(self, command: str, work_dir: Path, args: list[str], on_end_function):
+    def run(self, command: str, work_dir: Path, args: list[str], on_end_function) -> None:
+        """
+        Start a new subprocess with the given command and arguments.
+
+        Parameters
+        ----------
+        command : str
+            Executable name (e.g., 'konfai-apps').
+        work_dir : Path
+            Working directory in which the process will be executed.
+        args : list[str]
+            List of command-line arguments to pass to the executable.
+        on_end_function : callable
+            Callback to execute once the process has finished.
+        """
         self.setWorkingDirectory(str(work_dir))
+
+        # Disconnect any previous 'finished' slot to avoid stacking connections
         try:
             self.finished.disconnect()
         except TypeError:
+            # No slot connected yet
             pass
+
         self.finished.connect(on_end_function)
 
+        # Start the process asynchronously
         self.start(command, args)
-    
-    def stop(self):
+
+    def stop(self) -> None:
+        """
+        Immediately terminate the running process, if any.
+        """
         self.kill()
         self.waitForFinished(-1)
 
 
 class AppTemplateWidget(QWidget):
+    """
+    Abstract base widget for a KonfAI application panel.
+
+    This class encapsulates common logic for:
+      - Managing a temporary working directory
+      - Managing process lifecycle and "Run/Stop" behavior
+      - Synchronizing a Slicer parameter node with the GUI
+
+    Child classes must implement methods to initialize/update parameter nodes
+    and to propagate changes between GUI and parameter node.
+    """
 
     def __init__(self, name: str, ui_widget):
         super().__init__()
-        self._process = None
-        self._update_logs = None
-        self._update_progress = None
-        self._parameterNode = None
-        self._work_dir = None
-        self.name = name
+        self._process: Process | None = None
+        self._parameter_node = None
+        self._work_dir: Path = None  # type: ignore[assignment]
+        self._name = name
 
         self.setLayout(QVBoxLayout())
         self.layout().addWidget(ui_widget)
         self.ui = slicer.util.childWidgetVariables(ui_widget)
 
+        # Bind the MRML scene so that qMRML widgets in the .ui file work properly
         ui_widget.setMRMLScene(slicer.mrmlScene)
+        self._initialized = False
 
-    def app_setup(self, update_logs, update_progress, parameterNode):
+    def app_setup(self, update_logs, update_progress, parameter_node) -> None:
+        """
+        Initialize the application with callbacks and parameter node.
+
+        Parameters
+        ----------
+        update_logs : callable
+            Function to call when a new log line should be displayed.
+        update_progress : callable
+            Function to call to update progress value and speed.
+        parameterNode : vtkMRMLScriptedModuleNode
+            Parameter node used to persist application state.
+        """
         self._update_logs = update_logs
         self._update_progress = update_progress
-        self._parameterNode = parameterNode
+        self._parameter_node = parameter_node
         self.process = Process(update_logs, update_progress)
 
     def get_work_dir(self) -> Path | None:
+        """
+        Return the current working directory used for temporary files,
+        or None if no working directory is currently defined.
+        """
         return self._work_dir
-    
-    def create_new_work_dir(self):
+
+    def create_new_work_dir(self) -> None:
+        """
+        Create a fresh temporary directory for the current operation.
+        """
         self._work_dir = Path(slicer.util.tempDirectory())
-    
-    def remove_work_dir(self):
+
+    def remove_work_dir(self) -> None:
+        """
+        Delete the current temporary working directory and reset the reference.
+
+        The directory is removed recursively if it exists.
+        """
         if self._work_dir and self._work_dir.exists():
             shutil.rmtree(self._work_dir)
-            self._work_dir = None
-    
-    def is_running(self) -> bool:
-        return self._parameterNode.GetParameter("is_running") == "True"
-    
-    def set_running(self, state: bool) -> None:
-        self._parameterNode.SetParameter("is_running", str(state))
+            self._work_dir = None  # type: ignore[assignment]
 
-    def on_run_button(self, function):
+    def is_running(self) -> bool:
         """
-        Run processing when user clicks "Apply" button.
+        Check whether an operation is currently running according to the parameter node.
+
+        Returns
+        -------
+        bool
+            True if the parameter node reports that a process is running, False otherwise.
+        """
+        return self._parameter_node is not None and self._parameter_node.GetParameter("is_running") == "True"
+
+    def set_parameter(self, key: str, value: str) -> None:
+        if self._parameter_node is not None:
+            self._parameter_node.SetParameter(f"{self._name}/{key}", str(value))
+
+    def set_parameter_node(self, key: str, value) -> None:
+        if self._parameter_node is not None:
+            self._parameter_node.SetNodeReferenceID(f"{self._name}/{key}", value)
+
+    def get_parameter(self, key: str) -> str | bool:
+        if self._parameter_node is not None:
+            return self._parameter_node.GetParameter(f"{self._name}/{key}")
+        else:
+            return False
+
+    def get_parameter_node(self, key: str):
+        if self._parameter_node is not None:
+            return self._parameter_node.GetNodeReference(f"{self._name}/{key}")
+        else:
+            return None
+
+    def set_running(self, state: bool) -> None:
+        """
+        Update the 'is_running' flag in the parameter node.
+
+        Parameters
+        ----------
+        state : bool
+            True if an operation is considered running, False otherwise.
+        """
+        if self._parameter_node is not None:
+            self._parameter_node.SetParameter("is_running", str(state))
+
+    def on_run_button(self, function) -> None:
+        """
+        Generic handler for the "Run"/"Stop" button.
+
+        If no process is running:
+          - Clean and recreate a working directory
+          - Mark the state as running
+          - Initialize log and progress
+          - Call the provided function
+
+        If a process is already running:
+          - Request termination of the process.
         """
         if not self.is_running():
+            # Start a new operation
             self.remove_work_dir()
             self.create_new_work_dir()
             self.set_running(True)
@@ -231,252 +475,474 @@ class AppTemplateWidget(QWidget):
             try:
                 function()
             except Exception as e:
+                # Log the exception for debugging and reset running state
                 print(e)
                 self.set_running(False)
         else:
+            # Stop current operation
             self.set_running(False)
             self.process.stop()
+            # Give the process some time to terminate properly
             import time
+
             time.sleep(3)
-    
-    def cleanup(self):
+
+    def cleanup(self) -> None:
         """
         Called when the user closes the module and the widget is destroyed.
+
+        This method is responsible for cleanup tasks such as removing
+        the temporary working directory.
         """
         self.remove_work_dir()
-    
-    @abstractmethod
-    def initialize_parameter_node(self):
-        pass
-    
-    @abstractmethod
-    def initialize_GUI_from_parameter_node(self):
-        pass
 
     @abstractmethod
-    def update_GUI_from_parameter_node(self):
-        pass
+    def initialize_parameter_node(self) -> None:
+        """
+        Ensure parameter node values are initialized with sensible defaults.
+
+        Must be implemented by subclasses.
+        """
+        raise NotImplementedError
 
     @abstractmethod
-    def update_parameter_node_from_GUI(self, caller=None, event=None):
-        pass
+    def initialize_gui_from_parameter_node(self) -> None:
+        """
+        Initialize GUI state from the parameter node.
 
-    def enter(self):
-        self.initialize_parameter_node()
-        self.initialize_GUI_from_parameter_node()
-        self.update_GUI_from_parameter_node()
+        Called when the widget is first entered or when a new parameter node is assigned.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_gui_from_parameter_node(self) -> None:
+        """
+        Update GUI components to reflect the current parameter node values.
+
+        This method should not modify the parameter node, only the GUI.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_parameter_node_from_gui(self, caller=None, event=None) -> None:
+        """
+        Update the parameter node to reflect the current GUI state.
+
+        This method is usually connected to GUI signals.
+        """
+        raise NotImplementedError
+
+    def enter(self) -> None:
+        """
+        Called when the user enters the corresponding application tab.
+
+        Ensures the parameter node is initialized and the GUI reflects its current state.
+        """
+        self.initialize_gui_from_parameter_node()
+        self.update_gui_from_parameter_node()
+
 
 class KonfAIAppTemplateWidget(AppTemplateWidget):
+    """
+    Concrete implementation of AppTemplateWidget for KonfAI applications.
+
+    This widget provides:
+      - Input/output volume selection for inference
+      - QA capabilities (evaluation with reference, or uncertainty estimation)
+      - Model selection from Hugging Face repositories
+      - Configuration access for KonfAI Apps (YAML files)
+    """
 
     def __init__(self, name: str, konfai_repo_list: list[str]):
-        super().__init__(name, slicer.util.loadUI(resourcePath("UI/KonfAIAppTemplate.ui")))
-        
+        super().__init__(name, slicer.util.loadUI(resource_path("UI/KonfAIAppTemplate.ui")))
+        self._konfai_repo_list = konfai_repo_list
+        # Attach metrics panels in both QA contexts: reference-based and reference-free
         self.evaluationPanel = KonfAIMetricsPanel()
         self.ui.withRefMetricsPlaceholder.layout().addWidget(self.evaluationPanel)
         self.uncertaintyPanel = KonfAIMetricsPanel()
         self.ui.noRefMetricsPlaceholder.layout().addWidget(self.uncertaintyPanel)
 
         self.description_expanded = False
+
+        settings = QSettings()
+        raw = settings.value(f"KonfAI-Settings/{name}/Models")
+        models_name = []
+        if raw is not None:
+            models_name = json.loads(raw)
+
+        default_models_name = []
         for konfai_repo in konfai_repo_list:
-            model_names = []
             try:
-                model_names = get_available_models_on_hf_repo(konfai_repo)
-            except RepositoryHFError as e:
+                default_models_name += [
+                    konfai_repo + ":" + model_name for model_name in get_available_models_on_hf_repo(konfai_repo)
+                ]
+            except AppRepositoryHFError as e:
                 slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
-            for model_name in model_names:
-                try:
-                    model = ModelHF(konfai_repo + ":" + model_name)
-                    self.ui.modelComboBox.addItem(model.get_display_name(), model)
-                except RepositoryHFError as e:
-                    slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
+        models_name = list(set(default_models_name + models_name))
+        # Populate the model combo box with models found in the provided Hugging Face repos
+        for model_name in models_name:
+            try:
+                if len(model_name.split(":")) == 2:
+                    model = ModelHF(model_name.split(":")[0], model_name.split(":")[1])
+                else:
+                    model = ModelDirectory(Path(model_name).parent, Path(model_name).name)
+                self.ui.modelComboBox.addItem(model.get_display_name(), model)
+            except Exception as e:
+                slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
+
         self.ui.modelComboBox.setCurrentIndex(0)
-        
-        self.ui.inputVolumeSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.update_parameter_node_from_GUI)
-        self.ui.outputVolumeSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.update_parameter_node_from_GUI)
 
-        self.ui.inputVolumeEvaluationSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.on_inputVolumeEvaluation_changed)
-        self.ui.inputInferenceStackSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.on_inputVolumeEvaluation_changed)
+        # Connect volume selectors to parameter node synchronization
+        self.ui.inputVolumeSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.update_parameter_node_from_gui)
+        self.ui.outputVolumeSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.update_parameter_node_from_gui)
 
-        self.ui.referenceVolumeSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.update_parameter_node_from_GUI)
-        self.ui.referenceMaskSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.update_parameter_node_from_GUI)
-        self.ui.transformSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.update_parameter_node_from_GUI)
-        
+        # Evaluation / uncertainty input selectors
+        self.ui.inputVolumeEvaluationSelector.connect(
+            "currentNodeChanged(vtkMRMLNode*)", self.on_input_volume_evaluation_changed
+        )
+        self.ui.inputVolumeSequenceSelector.connect(
+            "currentNodeChanged(vtkMRMLNode*)", self.on_input_volume_evaluation_changed
+        )
+
+        # Reference and transform nodes
+        self.ui.referenceVolumeSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.update_parameter_node_from_gui)
+        self.ui.referenceMaskSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.update_parameter_node_from_gui)
+        self.ui.inputTransformSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.update_parameter_node_from_gui)
+
+        self.ui.ensembleSpinBox.valueChanged.connect(self.on_ensemble_changed)
+        self.ui.ttaSpinBox.valueChanged.connect(self.on_tta_changed)
+        self.ui.mcDropoutSpinBox.valueChanged.connect(self.on_mc_dropout_changed)
+
+        # Model selection and management
         self.ui.modelComboBox.currentIndexChanged.connect(self.on_model_selected)
-
         self.ui.addModelButton.clicked.connect(self.on_add_model)
         self.ui.removeModelButton.clicked.connect(self.on_remove_model)
 
-        iconPath = os.path.join(os.path.dirname(__file__), "Resources", "Icons", "gear.png")
-        self.ui.configButton.setIcon(QIcon(iconPath))
+        # Configuration button (opens folder containing KonfAI YAML configs)
+        icon_path = os.path.join(os.path.dirname(__file__), "Resources", "Icons", "gear.png")
+        self.ui.configButton.setIcon(QIcon(icon_path))
         self.ui.configButton.setIconSize(QSize(18, 18))
         self.ui.configButton.clicked.connect(self.on_open_config)
 
+        # Run buttons for inference and QA
         self.ui.runInferenceButton.clicked.connect(self.on_run_inference_button)
         self.ui.runEvaluationButton.clicked.connect(self.on_run_evaluation_button)
-        
+
+        # Description toggle and QA tab changes
         self.ui.toggleDescriptionButton.clicked.connect(self.on_toggle_description)
         self.ui.qaTabWidget.currentChanged.connect(self.on_tab_changed)
-    
-    def set_information(self, model = None, number_of_ensemble = None, number_of_tta = None, number_of_mc_dropout = None):
+
+    def on_ensemble_changed(self):
+        self.set_parameter("number_of_ensemble", str(self.ui.ensembleSpinBox.value))
+
+    def on_tta_changed(self):
+        self.set_parameter("number_of_tta", str(self.ui.ttaSpinBox.value))
+
+    def on_mc_dropout_changed(self):
+        self.set_parameter("number_of_mc_dropout", str(self.ui.mcDropoutSpinBox.value))
+
+    def set_information(
+        self,
+        model: str | None = None,
+        number_of_ensemble: int | None = None,
+        number_of_tta: int | None = None,
+        number_of_mc_dropout: int | None = None,
+    ) -> None:
+        """
+        Update the model information summary panel (model name + ensemble/TTA/MC counts).
+
+        When any field is None or not available, a placeholder is displayed.
+        """
         self.ui.modelSummaryValue.setText(f"Model: {model}" if model else "Model: N/A")
         self.ui.ensembleSummaryValue.setText(f"#{number_of_ensemble}" if number_of_ensemble else "#N/A")
         self.ui.ttaSummaryValue.setText(f"#{number_of_tta}" if number_of_ensemble and number_of_tta else "#N/A")
-        self.ui.mcSummaryValue.setText(f"#{number_of_mc_dropout}" if number_of_ensemble and number_of_mc_dropout else "#N/A")
+        self.ui.mcSummaryValue.setText(
+            f"#{number_of_mc_dropout}" if number_of_ensemble and number_of_mc_dropout else "#N/A"
+        )
 
-    def on_inputVolumeEvaluation_changed(self, node):
+    def on_input_volume_evaluation_changed(self, node) -> None:
+        """
+        Handler called when the evaluation input or stack input selection changes.
+
+        It attempts to read metadata from the selected node (or its storage),
+        updates the model information summary, and synchronizes the parameter node.
+        """
         if node:
             storage = node.GetStorageNode()
             if storage:
                 path = storage.GetFileName()
-                _, attr = get_infos(path)
-                if "Model" in attr and "NumberOfEnsemble" in attr and "NumberOfTTA" in attr and "NumberOfMCDropout" in attr:
-                    self.set_information(attr["Model"], attr["NumberOfEnsemble"], attr["NumberOfTTA"], attr["NumberOfMCDropout"])
+                if path and Path(path).exists():
+                    _, attr = get_infos(path)
+                    if (
+                        "Model" in attr
+                        and "NumberOfEnsemble" in attr
+                        and "NumberOfTTA" in attr
+                        and "NumberOfMCDropout" in attr
+                    ):
+                        self.set_information(
+                            attr["Model"],
+                            attr["NumberOfEnsemble"],
+                            attr["NumberOfTTA"],
+                            attr["NumberOfMCDropout"],
+                        )
+                    else:
+                        self.set_information()
                 else:
                     self.set_information()
             else:
-                self.set_information(node.GetAttribute("Model"), node.GetAttribute("NumberOfEnsemble"), node.GetAttribute("NumberOfTTA"), node.GetAttribute("NumberOfMCDropout"))
+                # Fallback: read attributes directly from the node if available
+                self.set_information(
+                    node.GetAttribute("Model"),
+                    node.GetAttribute("NumberOfEnsemble"),
+                    node.GetAttribute("NumberOfTTA"),
+                    node.GetAttribute("NumberOfMCDropout"),
+                )
+        self.update_parameter_node_from_gui()
 
-        self.update_parameter_node_from_GUI()
+    def enter(self) -> None:
+        """
+        Overridden AppTemplateWidget entry point.
 
-    
-    def enter(self):
+        Re-initializes parameter node, GUI state and ensures model selection
+        is consistent when the widget is shown.
+        """
         super().enter()
         self.on_model_selected()
 
-    def initialize_parameter_node(self):
-        if not self._parameterNode.GetNodeReference(f"{self.name}/InputVolume"):
-            firstVolumeNode = slicer.mrmlScene.GetFirstNodeByClass("vtkMRMLScalarVolumeNode")
-            if firstVolumeNode:
-                self._parameterNode.SetNodeReferenceID(f"{self.name}/InputVolume", firstVolumeNode.GetID())
-        if not self._parameterNode.GetParameter(f"{self.name}/Model"):
-            model = self.ui.modelComboBox.itemData(0)        
-            self._parameterNode.SetParameter(f"{self.name}/Model", f"{model.repo_id}:{model.model_name}")
+    def initialize_parameter_node(self) -> None:
+        self._initialized = False
+        """
+        Initialize the parameter node with default values for this app
+        (input volume, model ID, ensemble/TTA/MC-dropout parameters).
+        """
+        # Select default input nodes if nothing is selected yet
+        if not self.get_parameter("InputVolume"):
+            first_volume_node = slicer.mrmlScene.GetFirstNodeByClass("vtkMRMLScalarVolumeNode")
+            if first_volume_node and self._parameter_node is not None:
+                self._parameter_node.SetNodeReferenceID("InputVolume", first_volume_node.GetID())
 
+        # Set default model if none is stored yet
+        if not self.get_parameter("Model"):
+            model: ModelHF = self.ui.modelComboBox.itemData(0)
+            self.set_parameter("Model", model.get_name())
+
+        # Determine the current model object from the stored parameter if possible
         current_model = None
-        for model in [self.ui.modelComboBox.itemData(i) for i in range(self.ui.modelComboBox.count)]:
-            if f"{model.repo_id}:{model.model_name}" == self._parameterNode.GetParameter(f"{self.name}/Model"):
-                current_model = model
+        for i in range(self.ui.modelComboBox.count):
+            model_tmp: ModelHF = self.ui.modelComboBox.itemData(i)
+            if model_tmp.get_name() == self.get_parameter("Model"):
+                current_model = model_tmp
                 break
         if not current_model:
-             current_model = self.ui.modelComboBox.itemData(0)
+            current_model = self.ui.modelComboBox.itemData(0)
 
-        if not self._parameterNode.GetParameter(f"{self.name}/number_of_ensemble"):
-            self._parameterNode.SetParameter(f"{self.name}/number_of_ensemble", str(current_model.get_number_of_models()))
-        if not self._parameterNode.GetParameter(f"{self.name}/number_of_tta"):    
-            self._parameterNode.SetParameter(f"{self.name}/number_of_tta", str(current_model.get_maximum_tta()))
-        if not self._parameterNode.GetParameter(f"{self.name}/number_of_mc_dropout"):
-            self._parameterNode.SetParameter(f"{self.name}/number_of_mc_dropout", str(current_model._mc_dropout))
+        # Ensemble / TTA / MC-dropout defaults based on model capabilities
+        if not self.get_parameter("number_of_ensemble"):
+            self.set_parameter("number_of_ensemble", str(current_model.get_number_of_models()))
+        if not self.get_parameter("number_of_tta"):
+            self.set_parameter("number_of_tta", str(current_model.get_maximum_tta()))
+        if not self.get_parameter("number_of_mc_dropout"):
+            self.set_parameter("number_of_mc_dropout", str(current_model.get_mc_dropout()))
+        self.initialize_gui_from_parameter_node()
+        self._initialized = True
 
-    def initialize_GUI_from_parameter_node(self):
-        self.ui.inputVolumeSelector.setCurrentNode(self._parameterNode.GetNodeReference(f"{self.name}/InputVolume"))
-        
-        index = self.ui.modelComboBox.findData(self._parameterNode.GetParameter(f"{self.name}/Model"))
+    def initialize_gui_from_parameter_node(self) -> None:
+        """
+        Initialize GUI widget values from the parameter node.
+        """
+        # Model selection
+        model_param = self.get_parameter("Model")
+        # Search the combo box items for a matching model name
+        index = -1
+        for i in range(self.ui.modelComboBox.count):
+            model: ModelHF = self.ui.modelComboBox.itemData(i)
+            if model.get_name() == model_param:
+                index = i
+                break
         self.ui.modelComboBox.setCurrentIndex(index if index != -1 else 0)
 
-        self.ui.outputVolumeSelector.setCurrentNode(self._parameterNode.GetNodeReference(f"{self.name}/OutputVolume"))
-        self.ui.ensembleSpinBox.setValue(int(self._parameterNode.GetParameter(f"{self.name}/number_of_ensemble")))
-        self.ui.ttaSpinBox.setValue(int(self._parameterNode.GetParameter(f"{self.name}/number_of_tta")))
-        self.ui.mcDropoutSpinBox.setValue(int(self._parameterNode.GetParameter(f"{self.name}/number_of_mc_dropout")))
-        
-        self.ui.transformSelector.setCurrentNode(self._parameterNode.GetNodeReference(f"{self.name}/Transform"))
+        # Ensemble / TTA / MC-dropout spin boxes
+        self.ui.ensembleSpinBox.setValue(int(self.get_parameter("number_of_ensemble")))
+        self.ui.ttaSpinBox.setValue(int(self.get_parameter("number_of_tta")))
+        self.ui.mcDropoutSpinBox.setValue(int(self.get_parameter("number_of_mc_dropout")))
 
-    def update_GUI_from_parameter_node(self):
-        inputVolume = self._parameterNode.GetNodeReference(f"{self.name}/InputVolume")
-        if inputVolume and self.ui.modelComboBox.currentData:
+        # Input volume
+        self.ui.inputVolumeSelector.setCurrentNode(self.get_parameter_node("InputVolume"))
+
+        # Output volume
+        self.ui.outputVolumeSelector.setCurrentNode(self.get_parameter_node("OutputVolume"))
+
+        self.ui.referenceVolumeSelector.setCurrentNode(self.get_parameter_node("ReferenceVolume"))
+        self.ui.inputVolumeEvaluationSelector.setCurrentNode(self.get_parameter_node("InputVolumeEvaluation"))
+
+        self.ui.referenceMaskSelector.setCurrentNode(self.get_parameter_node("ReferenceMask"))
+
+        self.ui.inputTransformSelector.setCurrentNode(self.get_parameter_node("InputTransform"))
+
+        self.ui.inputVolumeSequenceSelector.setCurrentNode(self.get_parameter_node("InputVolumeSequence"))
+
+    def update_gui_from_parameter_node(self) -> None:
+        """
+        Update the GUI state based on the current parameter node values.
+
+        This includes enabling/disabling buttons, updating tooltips and
+        configuring default output volume names.
+        """
+        input_volume = self.get_parameter_node("InputVolume")
+        if input_volume and self.ui.modelComboBox.currentData:
             self.ui.runInferenceButton.toolTip = _("Start inference")
             self.ui.runInferenceButton.enabled = True
         else:
             self.ui.runInferenceButton.toolTip = _("Select input volume")
             self.ui.runInferenceButton.enabled = False
 
+        # Update run/stop label based on running state
         if not self.is_running():
             self.ui.runInferenceButton.text = "Run"
-            self.ui.runEvaluationButton.text = "Run"            
+            self.ui.runEvaluationButton.text = "Run"
         else:
             self.ui.runInferenceButton.text = "Stop"
             self.ui.runEvaluationButton.text = "Stop"
 
-        referenceVolume = self._parameterNode.GetNodeReference(f"{self.name}/ReferenceVolume")
-        inputEvaluationVolume = self._parameterNode.GetNodeReference(f"{self.name}/InputEvaluationVolume")
-        inferenceStackVolume = self._parameterNode.GetNodeReference(f"{self.name}/InputInferenceStackVolume")
+        reference_volume = self.get_parameter_node("ReferenceVolume")
+        input_evaluation_volume = self.get_parameter_node("InputVolumeEvaluation")
+        inference_stack_volume = self.get_parameter_node("InputVolumeSequence")
 
+        # Configure QA button depending on which tab is active
         if self.ui.qaTabWidget.currentWidget().name == "withRefTab":
-            if referenceVolume and referenceVolume.GetImageData() and inputEvaluationVolume and inputEvaluationVolume.GetImageData():
+            # Reference-based evaluation: need both input and reference volumes
+            if (
+                reference_volume
+                and reference_volume.GetImageData()
+                and input_evaluation_volume
+                and input_evaluation_volume.GetImageData()
+            ):
                 self.ui.runEvaluationButton.toolTip = _("Start evaluation")
                 self.ui.runEvaluationButton.enabled = True
             else:
                 self.ui.runEvaluationButton.toolTip = _("Select input and reference volumes")
                 self.ui.runEvaluationButton.enabled = False
         else:
-            if inferenceStackVolume and inferenceStackVolume.GetImageData() and inferenceStackVolume.GetImageData().GetNumberOfScalarComponents() > 1:
+            # Uncertainty estimation: need a stack volume with more than one component
+            if inference_stack_volume and inference_stack_volume.GetNumberOfDataNodes() > 1:
                 self.ui.runEvaluationButton.toolTip = _("Start uncertainty estimation")
                 self.ui.runEvaluationButton.enabled = True
             else:
                 self.ui.runEvaluationButton.toolTip = _("Select input volume")
                 self.ui.runEvaluationButton.enabled = False
 
-        if inputVolume:
-            self.ui.outputVolumeSelector.baseName = _("{volume_name} Output").format(volume_name=inputVolume.GetName())
+        # Suggest an output volume base name derived from input volume name
+        if input_volume:
+            self.ui.outputVolumeSelector.baseName = _("{volume_name} Output").format(volume_name=input_volume.GetName())
 
-    def update_parameter_node_from_GUI(self, caller=None, event=None):
-        wasModified = self._parameterNode.StartModify()  # Modify all properties in a single batch
-        self._parameterNode.SetNodeReferenceID(f"{self.name}/InputVolume", self.ui.inputVolumeSelector.currentNodeID)
-        self._parameterNode.SetParameter(f"{self.name}/Model", str(self.ui.modelComboBox.currentIndex))
-        self._parameterNode.SetNodeReferenceID(f"{self.name}/OutputVolume", self.ui.outputVolumeSelector.currentNodeID)
-        
-        self._parameterNode.SetNodeReferenceID(f"{self.name}/ReferenceVolume", self.ui.referenceVolumeSelector.currentNodeID)
-        self._parameterNode.SetNodeReferenceID(f"{self.name}/ReferenceMask", self.ui.referenceMaskSelector.currentNodeID)
-        self._parameterNode.SetNodeReferenceID(f"{self.name}/Transform", self.ui.transformSelector.currentNodeID)
-        
-        self._parameterNode.SetNodeReferenceID(f"{self.name}/InputEvaluationVolume", self.ui.inputVolumeEvaluationSelector.currentNodeID)
-        self._parameterNode.SetNodeReferenceID(f"{self.name}/InputInferenceStackVolume", self.ui.inputInferenceStackSelector.currentNodeID)
-        self._parameterNode.EndModify(wasModified)
+    def update_parameter_node_from_gui(self, caller=None, event=None) -> None:
+        """
+        Propagate current GUI selection values to the parameter node.
 
-    def _save_models_dir_list_in_settings(self) -> None:
-        settings = QSettings()
-        # settings.setValue(SETTING_MODEL_DIR_KEY, json.dumps(list(self.models.keys())))
+        This method should be called whenever a relevant widget changes
+        (volume selectors, model selection, etc.).
+        """
+        if self._parameter_node is None or not self._initialized:
+            return
+        was_modified = self._parameter_node.StartModify()
+        try:
+            self.set_parameter_node("InputVolume", self.ui.inputVolumeSelector.currentNodeID)
 
-    def on_model_selected(self):
-        """Handle model selection and display its description."""
+            self.set_parameter_node("OutputVolume", self.ui.outputVolumeSelector.currentNodeID)
+
+            self.set_parameter_node("ReferenceVolume", self.ui.referenceVolumeSelector.currentNodeID)
+            self.set_parameter_node("InputVolumeEvaluation", self.ui.inputVolumeEvaluationSelector.currentNodeID)
+
+            self.set_parameter_node("ReferenceMask", self.ui.referenceMaskSelector.currentNodeID)
+            self.set_parameter_node("InputTransform", self.ui.inputTransformSelector.currentNodeID)
+
+            self.set_parameter_node(
+                "InputVolumeSequence",
+                self.ui.inputVolumeSequenceSelector.currentNodeID,
+            )
+        finally:
+            self._parameter_node.EndModify(was_modified)
+
+    def on_model_selected(self) -> None:
+        """
+        Handle model selection changes.
+
+        This method:
+          - Resets description expansion
+          - Adjusts ensemble / TTA / MC-dropout spin box ranges
+          - Enables/disables QA options depending on model capabilities
+        """
         model: ModelHF = self.ui.modelComboBox.currentData
-        self.ui.removeModelButton.setEnabled(False)
+        if model is None:
+            return
+
+        # Removing model from disk is only relevant for custom (local) models;
+        # by default we disable the button for HF models.
+        self.ui.removeModelButton.setEnabled(model.get_name().split(":")[0] not in self._konfai_repo_list)
+
+        # Reset description expansion state and update description label
         self.description_expanded = False
         self.on_toggle_description()
 
+        # Update ensemble / TTA / MC-dropout limits
+        if int(self.get_parameter("number_of_ensemble")) > model.get_number_of_models():
+            self.set_parameter("number_of_mc_dropout", str(model.get_number_of_models()))
+
+        if int(self.get_parameter("number_of_tta")) > model.get_maximum_tta():
+            self.set_parameter("number_of_tta", str(model.get_maximum_tta()))
+        if int(self.get_parameter("number_of_mc_dropout")) > model.get_mc_dropout():
+            self.set_parameter("number_of_mc_dropout", str(model.get_mc_dropout()))
+
         self.ui.ensembleSpinBox.setMaximum(model.get_number_of_models())
-        self.ui.ensembleSpinBox.setValue(model.get_number_of_models())
+
         self.ui.ttaSpinBox.setEnabled(model.get_maximum_tta() > 0)
         self.ui.ttaSpinBox.setMaximum(model.get_maximum_tta())
 
         self.ui.mcDropoutSpinBox.setEnabled(model._mc_dropout > 0)
         self.ui.mcDropoutSpinBox.setMaximum(model._mc_dropout)
+
+        # Enable QA sections based on model capabilities (evaluation/uncertainty support)
         has_evaluation, has_uncertainty = model.has_capabilities()
         self.ui.evaluationCollapsible.setEnabled(has_evaluation or has_uncertainty)
         if not has_evaluation and not has_uncertainty:
             self.ui.evaluationCollapsible.collapsed = True
 
+        # Enable/disable tabs
         self.ui.qaTabWidget.setTabEnabled(0, has_evaluation)
         self.ui.qaTabWidget.setTabEnabled(1, has_uncertainty)
 
-    def on_toggle_description(self):
-        model = self.ui.modelComboBox.currentData
+        self.set_parameter("Model", model.get_name())
+
+    def on_toggle_description(self) -> None:
+        """
+        Toggle between short and full model description text in the UI.
+        """
+        model: ModelHF = self.ui.modelComboBox.currentData
+        if not model:
+            return
+
         if self.description_expanded:
             self.ui.modelDescriptionLabel.setText(model.get_description())
             self.ui.toggleDescriptionButton.setText("Less ▲")
         else:
             self.ui.modelDescriptionLabel.setText(model.get_short_description())
             self.ui.toggleDescriptionButton.setText("More ▼")
+
         self.description_expanded = not self.description_expanded
 
-    def on_remove_model(self):
-        cb = self.ui.modelComboBox
-        idx = cb.currentIndex
-        model_dir = self.ui.modelComboBox.currentData
+    def on_remove_model(self) -> None:
+        """
+        Remove the currently selected model from the list, optionally deleting
+        the corresponding directory from disk.
+
+        This is intended for locally added models, not Hugging Face models.
+        """
+        model: ModelHF = self.ui.modelComboBox.currentData
 
         mb = QMessageBox()
         mb.setIcon(QMessageBox.Warning)
         mb.setWindowTitle("Remove model?")
-        mb.setText(f"Do you really want to remove “{model_dir}” from the list?")
+        mb.setText(f"Do you really want to remove “{model.get_display_name()}” from the list?")
         mb.setInformativeText("This will remove the model entry from the extension’s list.")
         mb.setStandardButtons(QMessageBox.Yes | QMessageBox.Cancel)
         mb.setDefaultButton(QMessageBox.Cancel)
@@ -488,31 +954,36 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         if mb.exec_() != QMessageBox.Yes:
             return
 
-        cb.removeItem(idx)
+        index = self.ui.modelComboBox.findText(model.get_display_name())
+        self.ui.modelComboBox.removeItem(index)
 
-        if chk.isChecked() and model_dir and os.path.isdir(model_dir):
-            try:
-                dangerous = {os.path.expanduser("~"), "/", "C:\\"}
-                if os.path.abspath(model_dir) in dangerous:
-                    raise RuntimeError(f"Refusing to delete a critical directory: {model_dir}")
+        if chk.isChecked():
+            if isinstance(model, ModelDirectory):
+                try:
+                    shutil.rmtree(model.get_name())
+                    QMessageBox.information(
+                        None, "Folder deleted", f"The folder has been successfully deleted:\n{model.get_name()}"
+                    )
+                except Exception as e:
+                    QMessageBox.critical(None, "Deletion error", f"Failed to delete folder:\n{model.get_name()}\n\n{e}")
 
-                shutil.rmtree(model_dir)
-                QMessageBox.information(
-                    None, "Folder deleted", f"The folder has been successfully deleted:\n{model_dir}"
-                )
-            except Exception as e:
-                QMessageBox.critical(None, "Deletion error", f"Failed to delete folder:\n{model_dir}\n\n{e}")
-
-    def on_open_config(self):
+    def on_open_config(self) -> None:
         """
-        Open configuration file when user clicks "Open config" button.
+        Open the directory containing the inference configuration
+
+        The folder is opened in the operating system's default file browser.
         """
-        _, inference_file_path, _ = self.ui.modelComboBox.currentData.download_inference(0)
-        #self.ui.modelComboBox.currentData.download_evaluation()
-        #self.ui.modelComboBox.currentData.download_uncertainty()
+        model: ModelHF = self.ui.modelComboBox.currentData
+        if model is None:
+            return
+
+        _, inference_file_path, _ = model.download_inference(0)
         QDesktopServices.openUrl(QUrl.fromLocalFile(Path(inference_file_path).parent))
 
-    def on_add_model(self):
+    def on_add_model(self) -> None:
+        """
+        Show a menu to add a new model (from a folder, from Hugging Face, or configure fine-tuning).
+        """
         m = QMenu()
         act_folder = m.addAction("Add from folder…")
         act_hf = m.addAction("Add from Hugging Face…")
@@ -527,33 +998,47 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         elif chosen is act_ft:
             self.on_add_ft()
 
-    def on_add_folder(self):
+    def on_add_folder(self) -> None:
+        """
+        Add a model located in a local folder to the model list.
+
+        The folder is expected to contain a valid KonfAI model configuration (YAML + weights).
+        """
         model_dir = QFileDialog.getExistingDirectory(None, "Select Model Folder", os.path.expanduser("~"))
         if not model_dir:
             return
-
-        if model_dir + ":None" in self.models:
-            QMessageBox.information(None, "Info", f"This name {model_dir} is already in the list.")
         try:
-            model = Model(Path(model_dir), None)
-        except ModelConfigError as e:
+            model = ModelDirectory(Path(model_dir).parent, Path(model_dir).name)
+        except AppDirectoryError as e:
             slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
             return
 
-        for model_tmp in self.models.values():
-            if model_tmp.get_display_name() == model.get_display_name():
-                QMessageBox.warning(
-                    None,
-                    "Duplicate Model Name",
-                    f"A model named “{model_tmp.get_display_name()}” already exists in the list.\n\n"
-                    "Each model must have a unique display name.",
-                )
-                return
-        self.models[model_dir + ":None"] = model
-        self.ui.modelComboBox.addItem(model.get_display_name(), model_dir + ":None")
-        self.ui.modelComboBox.setCurrentIndex(self.ui.modelComboBox.findData(model_dir + ":None"))
+        # Ensure uniqueness of display names to avoid confusion in the combo box
+        items = [self.ui.modelComboBox.itemText(i) for i in range(self.ui.modelComboBox.count)]
+        if model.get_display_name() in items:
+            QMessageBox.critical(
+                None,
+                "Model already listed",
+                f'The model "{model.get_display_name()}" is already in the list.',
+            )
+            return
+        self.ui.modelComboBox.addItem(model.get_display_name(), model)
+        self.ui.modelComboBox.setCurrentIndex(self.ui.modelComboBox.findData(model))
 
-    def ask_subdir(self, dirs):
+    def ask_subdir(self, dirs: list[str]) -> str | None:
+        """
+        Ask the user to select a subdirectory from a list of directory names.
+
+        Parameters
+        ----------
+        dirs : list[str]
+            Available subdirectories to choose from.
+
+        Returns
+        -------
+        str | None
+            The selected directory name or None if the user cancels.
+        """
         dlg = QInputDialog()
         dlg.setWindowTitle("Select subdirectory")
         dlg.setLabelText("Choose a directory:")
@@ -565,9 +1050,15 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         return dlg.textValue()
 
+    def on_add_hf(self) -> None:
+        """
+        Add a model from a Hugging Face repository.
 
-    def on_add_hf(self):
+        The user is prompted for a repo id (e.g., 'VBoussot/ImpactSynth') and then
+        a subdirectory (model name) is selected among the available directories.
+        """
         from huggingface_hub import HfApi
+
         text = QInputDialog().getText(
             self,
             "Add from Hugging Face",
@@ -577,7 +1068,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         repo_id = text.strip()
         if not repo_id:
             return
-        
+
         api = HfApi()
         base_repo_id, _, revision = repo_id.partition("@")
 
@@ -588,216 +1079,319 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                 revision=revision or None,
                 repo_type="model",
             )
-        except:
-            QMessageBox.critical(
-                None,
-                "Hugging Face",
-                f"Repository '{repo_id}' does not exist on Hugging Face."
-            )
+        except Exception:
+            QMessageBox.critical(None, "Hugging Face", f"Repository '{repo_id}' does not exist on Hugging Face.")
             return
+
+        # List top-level directories as candidate model names
         dirs = sorted({path.split("/")[0] for path in files if "/" in path})
-        model_name = self.ask_subdir(
-            dirs,
-            )
+        model_name = self.ask_subdir(dirs)
         if model_name:
             from konfai.utils.utils import is_model_repo
+
             state, error, _ = is_model_repo(repo_id, model_name)
             if not state:
-                QMessageBox.critical(
-                    None,
-                    "Model",
-                    error
-                )
-            model = ModelHF(repo_id + ":" + model_name)
+                QMessageBox.critical(None, "Model", error)
+                return
 
+            model = ModelHF(repo_id, model_name)
+
+            # Do not add duplicate display names
             items = [self.ui.modelComboBox.itemText(i) for i in range(self.ui.modelComboBox.count)]
             if model.get_display_name() in items:
                 QMessageBox.critical(
                     None,
                     "Model already listed",
-                    f"The model \"{model_name}\" is already in the list."
+                    f'The model "{model.get_display_name()}" is already in the list.',
                 )
                 return
-            
+
             self.ui.modelComboBox.addItem(model.get_display_name(), model)
             self.ui.modelComboBox.setCurrentIndex(self.ui.modelComboBox.findData(model))
 
-    def on_add_ft(self):
-        # Choisir le dossier parent
-        parent_dir = QFileDialog.getExistingDirectory(self.parent, "Choose parent directory for the new model")
+    def on_add_ft(self) -> None:
+        """
+        Create a new folder intended for fine-tuning a model and add it to the list.
+
+        This helper guides the user through selecting a parent directory,
+        naming the fine-tune model folder and creating a basic skeleton with a README.
+        """
+        model: ModelHF = self.ui.modelComboBox.currentData
+        if model is None:
+            return
+
+        # Choose the parent directory for the new model
+        parent_dir = QFileDialog.getExistingDirectory(None, "Choose parent directory for the new model")
         if not parent_dir:
             return
 
-        # Nom du nouveau modèle
-        name, ok = QInputDialog.getText(self.parent, "Fine tune", "New model name (folder will be created):")
-        if not ok or not name.strip():
+        # Ask for the new model name
+        name = QInputDialog.getText(None, "Fine tune", "New model name (folder will be created):")
+        if not name.strip():
             return
-        # Slug safe
+
+        # Ask for the new model diplay name
+        display_name = QInputDialog.getText(None, "Fine tune", "New diplay model name:")
+        if not display_name.strip():
+            return
+
+        items = [self.ui.modelComboBox.itemText(i) for i in range(self.ui.modelComboBox.count)]
+        if display_name in items:
+            QMessageBox.critical(
+                None,
+                "Model already listed",
+                f'The model "{display_name}" is already in the list.',
+            )
+            return
+
+        # Make a filesystem-safe name (slug)
         safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", name.strip())
         if not safe:
-            QMessageBox.warning(self.parent, "Invalid name", "Please enter a valid name.")
+            QMessageBox.warning(None, "Invalid name", "Please enter a valid name.")
             return
 
-        # Créer le dossier (ajoute suffixe _1, _2 si existe)
-        base = Path(parent_dir)
-        target = base / safe
-        if target.exists():
-            i = 1
-            while (base / f"{safe}_{i}").exists():
-                i += 1
-            target = base / f"{safe}_{i}"
-        try:
-            target.mkdir(parents=True, exist_ok=False)
-            (target / "README.txt").write_text("Fine-tune model folder (empty).\n")
-        except Exception as e:
-            QMessageBox.critical(self.parent, "Create folder failed", str(e))
-            return
+        model.install_fine_tune(Path(parent_dir) / name, display_name)
+        # Add the folder to the model combo box
+        model_ft = ModelDirectory(Path(parent_dir), name)
+        self.ui.modelComboBox.addItem(model_ft.get_display_name(), model_ft)
+        self.ui.modelComboBox.setCurrentIndex(self.ui.modelComboBox.findData(model_ft))
 
-        # Ajoute dans la combo
-        self.ui.modelComboBox.addItem(f"{target.name} (ft)", str(target))
-        self.ui.modelComboBox.setCurrentIndex(self.ui.modelComboBox.count() - 1)
-        if hasattr(self.logic, "logCallback") and self.logic.logCallback:
-            self.logic.logCallback(f"Fine-tune folder created: {target}")
+    def on_tab_changed(self) -> None:
+        """
+        Update GUI state when the user switches between QA tabs.
 
+        Ensures that button enabling/disabling is consistent with the current tab.
+        """
+        self.update_gui_from_parameter_node()
 
-    def on_tab_changed(self):
-        self.update_GUI_from_parameter_node()
-
-
-            
-    def on_run_inference_button(self):
+    def on_run_inference_button(self) -> None:
+        """
+        Run or stop inference depending on the current state.
+        """
         self.on_run_button(self.inference)
-    
-    def on_run_evaluation_button(self):
-        self.on_run_button(self.evaluation if self.ui.qaTabWidget.currentWidget().name == "withRefTab" else self.uncertainty)
 
+    def on_run_evaluation_button(self) -> None:
+        """
+        Run or stop evaluation / uncertainty estimation depending on the current QA tab.
+        """
+        if self.ui.qaTabWidget.currentWidget().name == "withRefTab":
+            self.on_run_button(self.evaluation)
+        else:
+            self.on_run_button(self.uncertainty)
 
-    def evaluation(self):
-        self.evaluationPanel.clearImagesList()
-        self.uncertaintyPanel.clearImagesList()
-        
-        if not self.ui.transformSelector.currentNode():
-            newTransform = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLinearTransformNode", "IdentityTransform")
-            self.ui.transformSelector.setCurrentNode(newTransform)
-            self._parameterNode.SetNodeReferenceID(f"{self.name}/Transform", self.ui.transformSelector.currentNodeID)
+    def cleanup(self) -> None:
+        super().cleanup()
+        settings = QSettings()
+        settings.setValue(
+            f"KonfAI-Settings/{self._name}/Models",
+            json.dumps([self.ui.modelComboBox.itemData(i).get_name() for i in range(self.ui.modelComboBox.count)]),
+        )
 
-        outputNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLScalarVolumeNode", self.ui.inputVolumeEvaluationSelector.currentNode().GetName() + "_toRef")
+    def evaluation(self) -> None:
+        """
+        Run reference-based evaluation using the selected model.
 
+        Steps:
+          - Resample input volume and optional mask to the reference volume space
+          - Export input and reference volumes (and mask if present) to .mha files
+          - Call `konfai-apps eval` in the temporary work directory
+          - Read resulting JSON metrics and MHA images and display them in the panel
+        """
+        self.evaluationPanel.clear_images_list()
+        self.evaluationPanel.clear_metrics()
+        self.uncertaintyPanel.clear_images_list()
+
+        # Ensure we have a transform node; if not, create an identity transform
+        if not self.ui.inputTransformSelector.currentNode():
+            new_transform = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLinearTransformNode", "IdentityTransform")
+            self.ui.inputTransformSelector.setCurrentNode(new_transform)
+            self.set_parameter_node("InputTransform", self.ui.inputTransformSelector.currentNodeID)
+
+        # Create an output node to store the warped input volume (aligned to reference)
+        output_node = slicer.mrmlScene.AddNewNodeByClass(
+            "vtkMRMLScalarVolumeNode",
+            self.ui.inputVolumeEvaluationSelector.currentNode().GetName() + "_toRef",
+        )
+
+        # Resample the input volume to match the reference grid, using the selected transform
         params = {
             "inputVolume": self.ui.inputVolumeEvaluationSelector.currentNode().GetID(),
             "referenceVolume": self.ui.referenceVolumeSelector.currentNode().GetID(),
-            "outputVolume": outputNode.GetID(),
-            "interpolationType": "linear", 
-            "warpTransform": self.ui.transformSelector.currentNode().GetID(),
+            "outputVolume": output_node.GetID(),
+            "interpolationType": "linear",
+            "warpTransform": self.ui.inputTransformSelector.currentNode().GetID(),
         }
 
         slicer.cli.runSync(slicer.modules.resamplescalarvectordwivolume, None, params)
 
+        # Write the resampled volume and reference volume to disk
+        volume_storage_node = slicer.mrmlScene.CreateNodeByClass("vtkMRMLVolumeArchetypeStorageNode")
+        volume_storage_node.SetFileName(str(self._work_dir / "Volume.mha"))
+        volume_storage_node.UseCompressionOff()
+        volume_storage_node.WriteData(output_node)
+        volume_storage_node.UnRegister(None)
 
-        volumeStorageNode = slicer.mrmlScene.CreateNodeByClass("vtkMRMLVolumeArchetypeStorageNode")
-        volumeStorageNode.SetFileName(str(self._work_dir / "Volume.mha"))
-        volumeStorageNode.UseCompressionOff()
-        volumeStorageNode.WriteData(outputNode)
-        volumeStorageNode.UnRegister(None)
+        volume_storage_node = slicer.mrmlScene.CreateNodeByClass("vtkMRMLVolumeArchetypeStorageNode")
+        volume_storage_node.SetFileName(str(self._work_dir / "Reference.mha"))
+        volume_storage_node.UseCompressionOff()
+        volume_storage_node.WriteData(self.ui.referenceVolumeSelector.currentNode())
+        volume_storage_node.UnRegister(None)
 
-        volumeStorageNode = slicer.mrmlScene.CreateNodeByClass("vtkMRMLVolumeArchetypeStorageNode")
-        volumeStorageNode.SetFileName(str(self._work_dir / "Reference.mha"))
-        volumeStorageNode.UseCompressionOff()
-        volumeStorageNode.WriteData(self.ui.referenceVolumeSelector.currentNode())
-        volumeStorageNode.UnRegister(None)
-        
         model: ModelHF = self.ui.modelComboBox.currentData
 
+        # Build konfai-apps evaluation CLI arguments
         args = [
             "eval",
-            f"{model.repo_id}:{model.model_name}",
-            "-i", 
+            model.get_name(),
+            "-i",
             "Volume.mha",
             "--gt",
             "Reference.mha",
             "-o",
             "Evaluation",
         ]
+
+        # Optional: resample and include the reference mask if defined
         if self.ui.referenceMaskSelector.currentNode() and self.ui.referenceMaskSelector.currentNode().GetImageData():
-            outputNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLScalarVolumeNode", self.ui.referenceMaskSelector.currentNode().GetName() + "_toRef")
+            output_node = slicer.mrmlScene.AddNewNodeByClass(
+                "vtkMRMLScalarVolumeNode",
+                self.ui.referenceMaskSelector.currentNode().GetName() + "_toRef",
+            )
             params = {
                 "inputVolume": self.ui.referenceMaskSelector.currentNode().GetID(),
                 "referenceVolume": self.ui.referenceVolumeSelector.currentNode().GetID(),
-                "outputVolume": outputNode.GetID(),
-                "interpolationType": "nn", 
-                "warpTransform": self.ui.transformSelector.currentNode().GetID(),
+                "outputVolume": output_node.GetID(),
+                "interpolationType": "nn",
+                "warpTransform": self.ui.inputTransformSelector.currentNode().GetID(),
             }
 
             slicer.cli.runSync(slicer.modules.resamplescalarvectordwivolume, None, params)
-            
-            maskStorage = slicer.mrmlScene.CreateNodeByClass("vtkMRMLVolumeArchetypeStorageNode")
-            maskStorage.SetFileName(str(self._work_dir / "Mask.mha"))
-            maskStorage.UseCompressionOff()
-            maskStorage.WriteData(outputNode)
-            maskStorage.UnRegister(None)
+
+            mask_storage = slicer.mrmlScene.CreateNodeByClass("vtkMRMLVolumeArchetypeStorageNode")
+            mask_storage.SetFileName(str(self._work_dir / "Mask.mha"))
+            mask_storage.UseCompressionOff()
+            mask_storage.WriteData(output_node)
+            mask_storage.UnRegister(None)
 
             args += ["--mask", "Mask.mha"]
 
-
-        if self._parameterNode.GetParameter("Device") != "None":
-            args += ["--gpu", self._parameterNode.GetParameter("Device")]
+        # Select device backend from parameter node (GPU indices or CPU fallback)
+        if self._parameter_node is not None and self._parameter_node.GetParameter("Device") != "None":
+            args += ["--gpu", self._parameter_node.GetParameter("Device")]
         else:
             args += ["--cpu", "1"]
-        
+
         def on_end_function() -> None:
+            """
+            Callback executed when the evaluation process finishes.
+
+            It loads metrics and images produced by konfai-apps and updates
+            the evaluation panel accordingly.
+            """
             if self.process.exitStatus() != QProcess.NormalExit:
                 self.set_running(False)
                 return
-            statistics = Statistics((self._work_dir / "Evaluation").rglob("*.json").__next__())
-            self.evaluationPanel.setMetrics(statistics.read()) 
-            self.evaluationPanel.refreshImagesList(Path((self._work_dir / "Evaluation").rglob("*.mha").__next__().parent))
+            if not any((self._work_dir / "Evaluation").rglob("*.json")):
+                self.set_running(False)
+                return
+
+            # Read the first JSON metrics file found in the Evaluation directory
+            statistics = Statistics(next((self._work_dir / "Evaluation").rglob("*.json")))
+            self.evaluationPanel.set_metrics(statistics.read())
+
+            # Populate the image list with all .mha images in the Evaluation folder
+            self.evaluationPanel.refresh_images_list(Path(next((self._work_dir / "Evaluation").rglob("*.mha")).parent))
             self._update_logs("Processing finished.")
             self.set_running(False)
-            
+
         self.process.run("konfai-apps", self._work_dir, args, on_end_function)
 
-        
-    def uncertainty(self):
-        self.evaluationPanel.clearImagesList()
-        self.evaluationPanel.clearMetrics()
-        self.uncertaintyPanel.clearImagesList()
-        self.uncertaintyPanel.clearMetrics()
+    def uncertainty(self) -> None:
+        """
+        Run uncertainty analysis using the selected model.
+
+        Steps:
+          - Export the inference stack from Slicer to an MHA file
+          - Call `konfai-apps uncertainty` with the selected model
+          - Read resulting JSON metrics and uncertainty maps and display them
+        """
+        # Clear previous metrics and images in both panels
+        self.evaluationPanel.clear_images_list()
+        self.uncertaintyPanel.clear_images_list()
+        self.uncertaintyPanel.clear_metrics()
+
         model: ModelHF = self.ui.modelComboBox.currentData
         args = [
             "uncertainty",
-            f"{model.repo_id}:{model.model_name}",
-            "-i", 
+            model.get_name(),
+            "-i",
             "Volume.mha",
             "-o",
             "Uncertainty",
         ]
 
-        if self._parameterNode.GetParameter("Device") != "None":
-            args += ["--gpu", self._parameterNode.GetParameter("Device")]
+        # Device selection (GPU or CPU)
+        if self._parameter_node is not None and self._parameter_node.GetParameter("Device") != "None":
+            args += ["--gpu", self._parameter_node.GetParameter("Device")]
         else:
             args += ["--cpu", "1"]
 
-        image = sitkUtils.PullVolumeFromSlicer(self.ui.inputInferenceStackSelector.currentNode())
+        n = self.ui.inputVolumeSequenceSelector.currentNode().GetNumberOfDataNodes()
+        images = [
+            sitkUtils.PullVolumeFromSlicer(self.ui.inputVolumeSequenceSelector.currentNode().GetNthDataNode(i))
+            for i in range(n)
+        ]
+        arrays = [sitk.GetArrayFromImage(img) for img in images]
+        stack = np.stack(arrays, axis=-1)
+        image = sitk.GetImageFromArray(stack)
+        image.CopyInformation(images[0])
+
         sitk.WriteImage(image, str(self._work_dir / "Volume.mha"))
 
         def on_end_function() -> None:
+            """
+            Callback executed when the uncertainty process finishes.
+
+            It loads metrics and MHA images produced by konfai-apps and updates
+            the uncertainty panel accordingly.
+            """
             if self.process.exitStatus() != QProcess.NormalExit:
                 self.set_running(False)
                 return
-            statistics = Statistics((self._work_dir / "Uncertainty").rglob("*.json").__next__())
-            self.uncertaintyPanel.setMetrics(statistics.read()) 
-            self.uncertaintyPanel.refreshImagesList(Path((self._work_dir / "Uncertainty").rglob("*.mha").__next__().parent))
+
+            if not any((self._work_dir / "Uncertainty").rglob("*.json")):
+                self.set_running(False)
+
+            statistics = Statistics(next((self._work_dir / "Uncertainty").rglob("*.json")))
+            self.uncertaintyPanel.set_metrics(statistics.read())
+            self.uncertaintyPanel.refresh_images_list(
+                Path(next((self._work_dir / "Uncertainty").rglob("*.mha")).parent)
+            )
             self._update_logs("Processing finished.")
             self.set_running(False)
 
         self.process.run("konfai-apps", self._work_dir, args, on_end_function)
 
     def inference(self) -> None:
+        """
+        Run inference using the selected KonfAI model.
+
+        Steps:
+          - Export the input volume to an MHA file with appropriate metadata
+          - Call `konfai-apps infer` with ensemble/TTA/MC-dropout options
+          - Load the resulting MHA files back into Slicer and update display
+          - Populate uncertainty panel with the generated stack if available
+        """
+        self.evaluationPanel.clear_images_list()
+        self.uncertaintyPanel.clear_images_list()
+        self.evaluationPanel.clear_metrics()
+        self.uncertaintyPanel.clear_metrics()
+
         model: ModelHF = self.ui.modelComboBox.currentData
         args = [
             "infer",
-            f"{model.repo_id}:{model.model_name}",
-            "-i", 
+            model.get_name(),
+            "-i",
             "Volume.mha",
             "-o",
             "Output",
@@ -808,15 +1402,23 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             "--mc",
             str(self.ui.mcDropoutSpinBox.value),
         ]
-        if self._parameterNode.GetParameter("Device") != "None":
-            args += ["--gpu", self._parameterNode.GetParameter("Device")]
+
+        # Device selection (GPU or CPU)
+        if self._parameter_node is not None and self._parameter_node.GetParameter("Device") != "None":
+
+            args += ["--gpu", self._parameter_node.GetParameter("Device")]
         else:
             args += ["--cpu", "1"]
+        input_node = self.ui.inputVolumeSelector.currentNode()
 
-        inputNode = self.ui.inputVolumeSelector.currentNode()
+        # Export volume to disk using SimpleITK
+        sitk_image = sitkUtils.PullVolumeFromSlicer(input_node)
 
-        sitk_image = sitkUtils.PullVolumeFromSlicer(inputNode)
-        sitk_image.SetMetaData("Model", f"{self.ui.modelComboBox.currentData.repo_id}:{self.ui.modelComboBox.currentData.model_name}")
+        # Store KonfAI metadata in the MHA header
+        sitk_image.SetMetaData(
+            "Model",
+            model.get_name(),
+        )
         sitk_image.SetMetaData("NumberOfEnsemble", f"{self.ui.ensembleSpinBox.value}")
         sitk_image.SetMetaData("NumberOfTTA", f"{self.ui.ttaSpinBox.value}")
         sitk_image.SetMetaData("NumberOfMCDropout", f"{self.ui.mcDropoutSpinBox.value}")
@@ -826,22 +1428,37 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self._update_logs(f"Input volume saved to temporary folder: {self._work_dir / 'Volume.mha'}")
 
         def on_end_function() -> None:
+            """
+            Callback executed when inference finishes.
+
+            It reads the first non-stack output file, loads it into Slicer, sets
+            appropriate volume class (scalar vs labelmap), copies orientation and
+            attributes, and configures slice viewer overlays.
+            """
             if self.process.exitStatus() != QProcess.NormalExit:
                 self.set_running(False)
                 return
-            for file in list((self._work_dir / "Output").rglob("*.mha")):
-                if file.name != "InferenceStack.mha":    
+
+            data = None
+            # Find the first non-stack MHA output file
+            for file in (self._work_dir / "Output").rglob("*.mha"):
+                if file.name != "InferenceStack.mha":
                     data, attr = image_to_data(sitk.ReadImage(str(file)))
                     break
+            if data is None:
+                self.set_running(False)
+                return
 
             self._update_logs("Loading result into Slicer...")
 
+            # Decide if output should be a label map (uint8) or scalar volume
             want_label = data.dtype == np.uint8
             expected_class = "vtkMRMLLabelMapVolumeNode" if want_label else "vtkMRMLScalarVolumeNode"
             base_name = "OutputLabel" if want_label else "OutputVolume"
 
             current = self.ui.outputVolumeSelector.currentNode()
 
+            # Ensure that the current node has the correct MRML class
             if current is None:
                 node = slicer.mrmlScene.AddNewNodeByClass(expected_class, base_name)
                 self.ui.outputVolumeSelector.setCurrentNode(node)
@@ -854,11 +1471,17 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             else:
                 node = current
 
+            # Populate the node with the first channel of the prediction data
             slicer.util.updateVolumeFromArray(node, data[0])
+
+            # Copy orientation from the input volume so they are aligned
             node.CopyOrientation(self.ui.inputVolumeSelector.currentNode())
+
+            # Copy KonfAI metadata to MRML node attributes
             for key, value in attr.items():
                 node.SetAttribute(key.split("_")[0], str(value))
 
+            # Configure slice viewer overlays depending on label vs scalar output
             if want_label:
                 slicer.util.setSliceViewerLayers(
                     label=node,
@@ -872,8 +1495,31 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                     fit=True,
                     foregroundOpacity=0.5,
                 )
-            self.evaluationPanel.clearImagesList()
-            self.uncertaintyPanel.refreshImagesList(Path((self._work_dir / "Output").rglob("*.mha").__next__().parent))
+
+            sequence_node = self.ui.inputVolumeSequenceSelector.currentNode()
+            if sequence_node is None:
+                sequence_node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSequenceNode", "InputTransformSequence")
+                self.ui.inputVolumeSequenceSelector.setCurrentNode(sequence_node)
+            else:
+                sequence_node.RemoveAllDataNodes()
+
+            for file in (self._work_dir / "Output").rglob("*.mha"):
+                if file.name == "InferenceStack.mha":
+                    inference_stack = sitk.ReadImage(str(file))
+                    if inference_stack.GetNumberOfComponentsPerPixel() > 1:
+                        data = sitk.GetArrayFromImage(inference_stack)
+                        for i in range(data.shape[-1]):
+                            img = sitk.GetImageFromArray(data[..., i])
+                            img.CopyInformation(inference_stack)
+                            temp_volume_node = sitkUtils.PushVolumeToSlicer(img, name=f"Output_stack_{i}")
+                            sequence_node.SetDataNodeAtValue(temp_volume_node, str(i))
+                            slicer.mrmlScene.RemoveNode(temp_volume_node)
+
+                    browser_node = slicer.mrmlScene.AddNewNodeByClass(
+                        "vtkMRMLSequenceBrowserNode", "SitkTransformSequenceBrowser"
+                    )
+                    browser_node.SetAndObserveMasterSequenceNodeID(sequence_node.GetID())
+                    break
 
             self._update_logs("Processing finished.")
             self.set_running(False)
@@ -881,134 +1527,184 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.process.run("konfai-apps", self._work_dir, args, on_end_function)
 
 
-
 class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic):
+    """
+    Core KonfAI widget responsible for:
+
+      - Global device selection (CPU/GPU and VRAM monitoring)
+      - Log and progress display
+      - RAM monitoring
+      - Management of KonfAI applications (tabs)
+      - Persistence of global parameters via a parameter node
+    """
 
     def __init__(self, title: str) -> None:
         """
-        Called when the user opens the module the first time and the widget is initialized.
+        Initialize the core KonfAI widget.
+
+        Parameters
+        ----------
+        title : str
+            Title displayed in the header of the KonfAI module.
         """
         QWidget.__init__(self)
         VTKObservationMixin.__init__(self)
         ScriptedLoadableModuleLogic.__init__(self)
-        
-        self._parameterNode = None
+
+        self._parameter_node = None
         self._updatingGUIFromParameterNode = False
-        self._apps = {}
-        self._current_konfai_app = None
-        
-        ui_widget = slicer.util.loadUI(resourcePath("UI/KonfAICore.ui")) 
+        self._apps: dict[str, AppTemplateWidget] = {}
+        self._current_konfai_app: AppTemplateWidget | None = None
+
+        # Load the main KonfAICore UI from .ui file
+        ui_widget = slicer.util.loadUI(resource_path("UI/KonfAICore.ui"))
         self.setLayout(QVBoxLayout())
         self.layout().addWidget(ui_widget)
         self.ui = slicer.util.childWidgetVariables(ui_widget)
-        self.initializeParameterNode()
 
+        self.initialize_parameter_node()
+        # Set header title
         self.ui.headerTitleLabel.text = title
 
+        # Populate GPU/CPU device combo box
         available_devices = self._get_available_devices()
         for available_device in available_devices:
             self.ui.deviceComboBox.addItem(available_device[0], available_device[1])
 
         self.ui.deviceComboBox.currentIndexChanged.connect(self.on_device_changed)
-        self.ui.deviceComboBox.setCurrentIndex(0 if len(available_devices) == 0 else 1)
-
-        # These connections ensure that we update parameter node when scene is closed
+        # Default to the last device entry (typically a GPU combo if available)
+        self.ui.deviceComboBox.setCurrentIndex(len(available_devices) - 1)
+        # Observe scene close/open to keep parameter node in sync
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.StartCloseEvent, self.on_scene_start_close)
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.EndCloseEvent, self.on_scene_end_close)
 
-        self.ui.openTempButton.setIcon(QIcon(resourcePath("Icons/folder.png")))
+        # Work directory button configuration
+        self.ui.openTempButton.setIcon(QIcon(resource_path("Icons/folder.png")))
         self.ui.openTempButton.setIconSize(QSize(18, 18))
         self.ui.openTempButton.clicked.connect(self.on_open_work_dir)
         self.ui.openTempButton.setEnabled(False)
-        
-        self.update_logs("", True)        
 
-    def register_apps(self, apps: list[AppTemplateWidget]):
+        # Initialize log display
+        self.update_logs("", True)
+
+    def register_apps(self, apps: list[AppTemplateWidget]) -> None:
+        """
+        Register one or multiple KonfAI application widgets.
+
+        If multiple apps are provided, a QTabWidget is created with one tab per app.
+        If a single app is provided, it is inserted directly into the layout.
+
+        Parameters
+        ----------
+        apps : list[AppTemplateWidget]
+            App widgets to register.
+        """
         if len(apps) > 1:
-            tabWidget = QTabWidget()
+            tab_widget = QTabWidget()
             for app in apps:
-                tabWidget.addTab(app, app.name)
-                
-            def on_tab_changed(self):
-                tabWidget.currentWidget().enter()
-            
-            tabWidget.currentChanged.connect(on_tab_changed)
-            
-            self.KonfAICoreWidget.layout().insertWidget(1, tabWidget)
+                tab_widget.addTab(app, app._name)
+
+            def on_tab_changed(index: int) -> None:
+                """
+                Called when the user switches between KonfAI app tabs.
+                """
+                current_app = tab_widget.widget(index)
+                if current_app:
+                    self._current_konfai_app = current_app
+                    current_app.enter()
+
+            tab_widget.currentChanged.connect(on_tab_changed)
+            self.KonfAICoreWidget.layout().insertWidget(1, tab_widget)
         else:
+            # Single app case: directly insert widget into layout
             app = apps[0]
             self.KonfAICoreWidget.layout().insertWidget(1, app)
-                    
-        for app in apps:
-            self._apps[app.name] = app
-            app.app_setup(self.update_logs, self.update_progress, self._parameterNode)
+            self._current_konfai_app = app
 
+        # Initialize each app with shared callbacks and parameter node
+        for app in apps:
+            self._apps[app._name] = app
+            app.app_setup(self.update_logs, self.update_progress, self._parameter_node)
+
+        # Enter the first app by default
         app = next(iter(self._apps.values()))
         self._current_konfai_app = app
+        app.initialize_parameter_node()
         app.enter()
 
+    def initialize_parameter_node(self):
+        """
+        Ensure a parameter node exists and is observed.
 
-    def initializeParameterNode(self):
+        This method also initializes a few global parameters such as 'is_running'.
         """
-        Ensure parameter node exists and observed.
-        """
-        self.setParameterNode(self.getParameterNode())
-        self._parameterNode.SetParameter("is_running", "False")
-        self.update_GUI_from_parameter_node()
-    
-    def setParameterNode(self, inputParameterNode):
-        """
-        Set and observe parameter node.
-        Observation is needed because when the parameter node is changed then the GUI must be updated immediately.
-        """
-        # Unobserve previously selected parameter node and add an observer to the newly selected.
-        # Changes of parameter node are observed so that whenever parameters are changed by a script or any other module
-        # those are reflected immediately in the GUI.
+        # Unobserve previously selected parameter node
+        if self._parameter_node is not None:
+            self.removeObserver(self._parameter_node, vtk.vtkCommand.ModifiedEvent, self.update_gui_from_parameter_node)
 
-        if self._parameterNode is not None:
-            self.removeObserver(self._parameterNode, vtk.vtkCommand.ModifiedEvent, self.update_GUI_from_parameter_node)
+        self._parameter_node = self.getParameterNode()
 
-        self._parameterNode = inputParameterNode
+        # Observe the newly selected parameter node
+        if self._parameter_node is not None:
+            self.addObserver(self._parameter_node, vtk.vtkCommand.ModifiedEvent, self.update_gui_from_parameter_node)
 
-        if self._parameterNode is not None:
-            self.addObserver(self._parameterNode, vtk.vtkCommand.ModifiedEvent, self.update_GUI_from_parameter_node)
-    
-    def update_GUI_from_parameter_node(self, caller=None, event=None):
+        if self._parameter_node is not None:
+            self._parameter_node.SetParameter("is_running", "False")
+            self.on_device_changed()
+        self.update_gui_from_parameter_node()
+
+    def update_gui_from_parameter_node(self, caller=None, event=None) -> None:
         """
-        This method is called whenever parameter node is changed.
-        The module GUI is updated to show the current state of the parameter node.
+        Update GUI elements when the parameter node changes.
+
+        This delegates the GUI update to the currently active KonfAI app
+        and also updates the availability of the work directory button.
         """
-        if self._parameterNode and not self._updatingGUIFromParameterNode and self._current_konfai_app:
+        if self._parameter_node and not self._updatingGUIFromParameterNode and self._current_konfai_app:
             self._updatingGUIFromParameterNode = True
-            self._current_konfai_app.update_GUI_from_parameter_node()
+            self._current_konfai_app.update_gui_from_parameter_node()
             self._updatingGUIFromParameterNode = False
-            
+
+            # Enable work directory button only when an app has an active work dir
             self.ui.openTempButton.setEnabled(self._current_konfai_app.get_work_dir() is not None)
 
-    def on_scene_start_close(self, caller, event):
+    def on_scene_start_close(self, caller, event) -> None:
         """
-        Called just before the scene is closed.
-        """
-        # Parameter node will be reset, do not use it anymore
-        self.setParameterNode(None)
+        Called just before the MRML scene is closed.
 
-    def on_scene_end_close(self, caller, event):
+        The parameter node will be reset, so we temporarily drop reference to it.
         """
-        Called just after the scene is closed.
+        if self._parameter_node is not None:
+            self.removeObserver(self._parameter_node, vtk.vtkCommand.ModifiedEvent, self.update_gui_from_parameter_node)
+
+        self._parameter_node = None
+
+    def on_scene_end_close(self, caller, event) -> None:
         """
-        # If this module is shown while the scene is closed then recreate a new parameter node immediately
-        if self.parent.isEntered:
-            self.initializeParameterNode() 
-    
+        Called just after the MRML scene is closed.
+
+        If this module is visible while the scene is closed, we recreate a new parameter node.
+        """
+        self.initialize_parameter_node()
+
     def _get_available_devices(self) -> list[tuple[str, str | None]]:
-        available_devices = [("cpu [slow]", None)]
-        try:
-            from torch.cuda import device_count, get_device_name, is_available
-        except:
-            slicer.util.pip_install("konfai")
+        """
+        Return the list of available computation devices.
+
+        The list always includes a CPU entry and, when possible, combinations
+        of GPUs detected via PyTorch and NVML.
+
+        Returns
+        -------
+        list[tuple[str, str | None]]
+            List of (display_label, device_index_string or None) tuples.
+        """
+        # CPU fallback
+        available_devices: list[tuple[str, str | None]] = [("cpu [slow]", None)]
 
         if is_available():
-            combos = []
+            # Build combinations of GPU indices, so multi-GPU usage can be exposed
+            combos: list[Any] = []
             nb_gpu = device_count()
             for r in range(1, nb_gpu + 1):
                 combos.extend(itertools.combinations(range(nb_gpu), r))
@@ -1016,140 +1712,211 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
                 device_name = get_device_name(device[0])
                 index = str(device[0])
                 for i in device[1:]:
-                    deviceName += f",{get_device_name(i)}"
+                    device_name += f",{get_device_name(i)}"
                     index += f"-{i}"
                 available_devices.append((f"gpu {index} - {device_name}", index))
         return available_devices
-    
-    def on_device_changed(self):
-        self._update_VRAM()
-        self._parameterNode.SetParameter("Device", self.ui.deviceComboBox.currentData if self.ui.deviceComboBox.currentData else "None")
 
-    def on_open_work_dir(self):
+    def on_device_changed(self) -> None:
         """
-        Open inference work_dir when user clicks "Open workdir" button.
+        Called when the user changes the selected device (CPU/GPU).
+
+        It updates VRAM monitoring and writes the selected device index
+        into the parameter node.
         """
-        QDesktopServices.openUrl(QUrl.fromLocalFile(self._current_konfai_app.get_work_dir()))
-    
-    def _update_ram(self):
-        """Update RAM usage display"""
+        self._update_vram()
+        if self._parameter_node is not None:
+            self._parameter_node.SetParameter(
+                "Device",
+                self.ui.deviceComboBox.currentData if self.ui.deviceComboBox.currentData else "None",
+            )
+
+    def on_open_work_dir(self) -> None:
+        """
+        Open the current KonfAI app working directory in the file browser.
+        """
+        if self._current_konfai_app and self._current_konfai_app.get_work_dir():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self._current_konfai_app.get_work_dir()))
+
+    def _update_ram(self) -> None:
+        """
+        Update the RAM usage display and progress bar.
+
+        If usage exceeds 80%, the progress bar color is set to red.
+        """
         ram = psutil.virtual_memory()
-        used_GB = (ram.total - ram.available) / (1024**3)
-        total_GB = ram.total / (1024**3)
-        self.ui.ramLabel.text = _("RAM used: {used:.1f} GB / {total:.1f} GB").format(used=used_GB, total=total_GB)
-        self.ui.ramProgressBar.value = used_GB / total_GB * 100
+        used_gb = (ram.total - ram.available) / (1024**3)
+        total_gb = ram.total / (1024**3)
+        self.ui.ramLabel.text = _("RAM used: {used:.1f} GB / {total:.1f} GB").format(used=used_gb, total=total_gb)
+        self.ui.ramProgressBar.value = used_gb / total_gb * 100
 
-        if used_GB / total_GB * 100 > 80:
-            self.ui.ramProgressBar.setStyleSheet("""
+        if used_gb / total_gb * 100 > 80:
+            # Red when RAM usage is high
+            self.ui.ramProgressBar.setStyleSheet(
+                """
                 QProgressBar::chunk {
                     background-color: #e74c3c;
                 }
-            """)
+            """
+            )
         else:
-            # Vert
-            self.ui.ramProgressBar.setStyleSheet("""
+            # Green otherwise
+            self.ui.ramProgressBar.setStyleSheet(
+                """
                 QProgressBar::chunk {
                     background-color: #2ecc71; 
                 }
-            """)
-    
-    def _update_VRAM(self):
-        """Update VRAM usage display"""
+            """  # noqa: W291
+            )
+
+    def _update_vram(self) -> None:
+        """
+        Update the VRAM usage display and progress bar for the selected GPU(s).
+
+        VRAM monitoring is only available when a GPU device is selected and NVML
+        is successfully initialized.
+        """
         device = self.ui.deviceComboBox.currentData
         if device is not None:
             try:
-                used_GB = 0
-                total_GB = 0
+                used_gb = 0.0
+                total_gb = 0.0
                 pynvml.nvmlInit()
                 for index in device.split(","):
                     info = pynvml.nvmlDeviceGetMemoryInfo(pynvml.nvmlDeviceGetHandleByIndex(int(index)))
-                    used_GB += info.used / (1024**3)
-                    total_GB += info.total / (1024**3)
+                    used_gb += info.used / (1024**3)
+                    total_gb += info.total / (1024**3)
+
                 self.ui.gpuLabel.show()
                 self.ui.gpuProgressBar.show()
                 self.ui.gpuLabel.text = _("VRAM used: {used:.1f} GB / {total:.1f} GB").format(
-                    used=used_GB, total=total_GB
+                    used=used_gb, total=total_gb
                 )
-                self.ui.gpuProgressBar.value = used_GB / total_GB * 100
-            
-                if used_GB / total_GB * 100 > 80:
-                    self.ui.gpuProgressBar.setStyleSheet("""
+                self.ui.gpuProgressBar.value = used_gb / total_gb * 100
+
+                if used_gb / total_gb * 100 > 80:
+                    self.ui.gpuProgressBar.setStyleSheet(
+                        """
                         QProgressBar::chunk {
                             background-color: #e74c3c;
                         }
-                    """)
+                    """
+                    )
                 else:
-                    # Vert partout
-                    self.ui.gpuProgressBar.setStyleSheet("""
+                    # Green otherwise
+                    self.ui.gpuProgressBar.setStyleSheet(
+                        """
                         QProgressBar::chunk {
                             background-color: #2ecc71;
                         }
-                    """)
+                    """
+                    )
 
-            except Exception as e:
+            except Exception:
+                # If NVML or GPU query fails, VRAM usage is reported as not available
                 self.ui.gpuLabel.text = _("VRAM used: n/a")
         else:
+            # Hide VRAM widgets when CPU is selected
             self.ui.gpuLabel.hide()
             self.ui.gpuProgressBar.hide()
-    
+
     def update_logs(self, text: str, clear: bool = False) -> None:
-        """Append text to log window"""
+        """
+        Append or replace text in the log window.
+
+        RAM and VRAM usage are updated at the same time, so the user always
+        has an up-to-date view of system resources during processing.
+        """
         self._update_ram()
-        self._update_VRAM()
+        self._update_vram()
         if clear:
             self.ui.logText.plainText = text
         else:
             self.ui.logText.appendPlainText(text)
 
     def update_progress(self, value: int, speed: float) -> None:
-        """Update progress bar"""
+        """
+        Update the progress bar and speed label.
+
+        Parameters
+        ----------
+        value : int
+            Progress percentage (0–100).
+        speed : float | str
+            Human-readable speed information, e.g. "5.2 it/s".
+        """
         self._update_ram()
-        self._update_VRAM()
+        self._update_vram()
         self.ui.progressBar.value = value
         self.ui.speedLabel.text = _("{speed}").format(speed=speed)
-    
-    def cleanup(self):
+
+    def cleanup(self) -> None:
         """
         Called when the application closes and the module widget is destroyed.
+
+        Delegates cleanup to each registered KonfAI app (e.g., to remove
+        temporary working directories).
         """
         for app in self._apps.values():
             app.cleanup()
 
+
 class KonfAIWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
+    """
+    Top-level scripted loadable module widget for KonfAI.
+
+    This class ties together the Slicer module system with the KonfAICoreWidget,
+    which handles actual application logic and GUI.
+    """
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """
         Called when the user opens the module the first time and the widget is initialized.
         """
-        ScriptedLoadableModuleWidget.__init__(self, parent)
-        VTKObservationMixin.__init__(self)  # needed for parameter node observation
-    
+        super().__init__(parent)
+        VTKObservationMixin.__init__(self)
+
     def setup(self) -> None:
         """
-        Called when the user opens the module the first time and the widget is initialized.
+        Construct and initialize the KonfAI module GUI.
+
+        This method is called once when the user first opens the module.
         """
-        ScriptedLoadableModuleWidget.setup(self)
-        self.konfai_core = KonfAICoreWidget("KonfAI")
-        predictionWidget = KonfAIAppTemplateWidget("Inference", ["VBoussot/ImpactSynth", "VBoussot/MRSegmentator-KonfAI"])
-        self.konfai_core.register_apps([predictionWidget])
+        super().setup()
+        # Create the core KonfAI widget
+        self.konfai_core = KonfAICoreWidget("KonfAI Apps")
+
+        # Create and register one KonfAI app specialized for inference
+        prediction_widget = KonfAIAppTemplateWidget(
+            "Inference",
+            ["VBoussot/ImpactSynth", "VBoussot/MRSegmentator-KonfAI", "VBoussot/TotalSegmentator-KonfAI"],
+        )
+        self.konfai_core.register_apps([prediction_widget])
+
+        # Attach the core widget to the Slicer module layout
         self.layout.addWidget(self.konfai_core)
-        
-    def cleanup(self):
+
+    def cleanup(self) -> None:
         """
         Called when the application closes and the module widget is destroyed.
         """
         self.removeObservers()
         self.konfai_core.cleanup()
 
-    def enter(self):
+    def enter(self) -> None:
         """
         Called each time the user opens this module.
+
+        This hook can be used to ensure state is up-to-date when the user
+        returns to the module. Currently no additional logic is required.
         """
-        # Make sure parameter node exists and observed
         pass
 
-    def exit(self):
+    def exit(self) -> None:  # noqa: A003
         """
-        Called each time the user opens a different module.
+        Called each time the user navigates away from this module.
+
+        This hook can be used to pause or finalize ongoing tasks, but
+        no special handling is required at the moment.
         """
         pass
