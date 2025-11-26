@@ -1,663 +1,958 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>KonfAIAppTemplateWidget</class>
- <widget class="qMRMLWidget" name="KonfAIAppTemplateWidget">
-  <layout class="QVBoxLayout" name="verticalLayout_inferenceTab">
-    <item>
-    <widget class="ctkCollapsibleButton" name="inferenceCollapsible">
-     <property name="text">
-      <string>Inference</string>
-     </property>
-     <layout class="QVBoxLayout" name="inferenceLayout">
-
-        <item>
-            <widget class="QWidget" name="InferenceTabWidget">
-            <layout class="QVBoxLayout" name="vLayout_inferenceTab">
-
-            <item>
-            <widget class="QWidget" name="inputsCollapsible">
-                <layout class="QFormLayout" name="formLayout_inputs">
-
-                <!-- Input -->
-                <item row="0" column="0">
-                <widget class="QLabel" name="label_input">
-                <property name="text"><string>Input volume</string></property>
-                </widget>
-                </item>
-                <item row="0" column="1">
-                <widget class="qMRMLNodeComboBox" name="inputVolumeSelector">
-                <property name="toolTip"><string>Pick the input to the algorithm.</string></property>
-                <property name="nodeTypes">
-                    <stringlist><string>vtkMRMLScalarVolumeNode</string></stringlist>
-                </property>
-                <property name="showChildNodeTypes"><bool>false</bool></property>
-                <property name="addEnabled"><bool>false</bool></property>
-                <property name="removeEnabled"><bool>false</bool></property>
-                </widget>
-                </item>
-
-                <!-- Model row -->
-                <item row="1" column="0">
-                <widget class="QLabel" name="label_model">
-                <property name="text"><string>Model</string></property>
-                </widget>
-                </item>
-                <item row="1" column="1">
-                <layout class="QHBoxLayout" name="hLayout_model">
-                <item>
-                    <widget class="QComboBox" name="modelComboBox">
-                    <property name="toolTip"><string>Choose model</string></property>
-                    </widget>
-                </item>
-                <item>
-                    <widget class="QPushButton" name="publishButton">
-                    <property name="visible"><bool>false</bool></property>
-                    <property name="toolTip"><string>Publish model</string></property>
-                    <property name="text"><string>Publish</string></property>
-                    <property name="autoDefault"><bool>false</bool></property>
-                    <property name="default"><bool>false</bool></property>
-                    <property name="maximumSize"><size><width>100</width><height>24</height></size></property>
-                    <property name="minimumSize"><size><width>80</width><height>24</height></size></property>
-                    </widget>
-                </item>
-                <item>
-                    <widget class="QPushButton" name="configButton">
-                    <property name="toolTip"><string>Open config folder</string></property>
-                    <property name="iconSize"><size><width>16</width><height>16</height></size></property>
-                    <property name="flat"><bool>true</bool></property>
-                    <property name="text"><string></string></property>
-                    <property name="maximumSize"><size><width>24</width><height>24</height></size></property>
-                    <property name="minimumSize"><size><width>24</width><height>24</height></size></property>
-                    <property name="styleSheet"><string notr="true">padding:0px; margin:0px;</string></property>
-                    </widget>
-                </item>
-                <item>
-                    <widget class="QPushButton" name="removeModelButton">
-                    <property name="toolTip"><string>Remove model</string></property>
-                    <property name="icon"><iconset><normaloff>:/Icons/minus.png</normaloff>:/Icons/minus.png</iconset></property>
-                    <property name="iconSize"><size><width>16</width><height>16</height></size></property>
-                    <property name="flat"><bool>true</bool></property>
-                    <property name="text"><string></string></property>
-                    <property name="maximumSize"><size><width>24</width><height>24</height></size></property>
-                    <property name="minimumSize"><size><width>24</width><height>24</height></size></property>
-                    <property name="styleSheet"><string notr="true">padding:0px; margin:0px;</string></property>
-                    </widget>
-                </item>
-                <item>
-                    <widget class="QPushButton" name="addModelButton">
-                    <property name="toolTip"><string>Add model</string></property>
-                    <property name="icon"><iconset><normaloff>:/Icons/plus.png</normaloff>:/Icons/plus.png</iconset></property>
-                    <property name="iconSize"><size><width>16</width><height>16</height></size></property>
-                    <property name="flat"><bool>true</bool></property>
-                    <property name="text"><string></string></property>
-                    <property name="maximumSize"><size><width>24</width><height>24</height></size></property>
-                    <property name="minimumSize"><size><width>24</width><height>24</height></size></property>
-                    <property name="styleSheet"><string notr="true">padding:0px; margin:0px;</string></property>
-                    </widget>
-                </item>
-                </layout>
-                </item>
-
-                <!-- Description -->
-                <item row="2" column="1">
-                <layout class="QVBoxLayout" name="descriptionLayout">
-                <property name="spacing"><number>0</number></property>
-                <property name="leftMargin"><number>0</number></property>
-                <property name="topMargin"><number>0</number></property>
-                <property name="rightMargin"><number>0</number></property>
-                <property name="bottomMargin"><number>0</number></property>
-                <item>
-                    <widget class="QLabel" name="modelDescriptionLabel">
-                    <property name="wordWrap"><bool>true</bool></property>
-                    <property name="alignment"><set>Qt::AlignTop|Qt::AlignLeft</set></property>
-                    <property name="styleSheet"><string notr="true">QLabel{margin:0;padding:0;border:none;background:transparent;}</string></property>
-                    </widget>
-                </item>
-                <item alignment="Qt::AlignLeft">
-                    <widget class="QPushButton" name="toggleDescriptionButton">
-                    <property name="text"><string>More ▼</string></property>
-                    <property name="flat"><bool>true</bool></property>
-                    <property name="maximumWidth"><number>60</number></property>
-                    <property name="styleSheet"><string notr="true">QPushButton{padding:0;margin:0;color:#0078d4;text-decoration:underline;}</string></property>
-                    </widget>
-                </item>
-                </layout>
-                </item>
-
-                <!-- Sampling -->
-<item row="3" column="0">
-  <widget class="QLabel" name="label_stochastic">
-    <property name="margin"><number>0</number></property>
-    <property name="text"><string>Sampling</string></property>
-  </widget>
-</item>
-
-<item row="3" column="1">
-  <layout class="QHBoxLayout" name="hLayout_sampling">
-    <property name="spacing">
-      <number>20</number>
-    </property>
-    <!-- Ensemble -->
-    <item>
-      <layout class="QHBoxLayout" name="hLayout_ensemble">
-        <property name="spacing"><number>2</number></property>
-
-        <item>
-          <widget class="QLabel" name="label_ensemble">
-            <property name="text"><string>Ensemble:</string></property>
-          </widget>
-        </item>
-        <item>
-          <widget class="QSpinBox" name="ensembleSpinBox">
-            <property name="toolTip">
-              <string>Number of models in the ensemble (>=1 means enabled).</string>
-            </property>
-            <property name="minimum"><number>1</number></property>
-            <property name="maximum"><number>64</number></property>
-            <property name="value"><number>0</number></property>
-            <property name="prefix"><string>#</string></property>
-            <property name="maximumWidth"><number>70</number></property>
-          </widget>
-        </item>
-
+   <class>KonfAIAppTemplateWidget</class>
+   <widget class="qMRMLWidget" name="KonfAIAppTemplateWidget">
+      <layout class="QVBoxLayout" name="verticalLayout_inferenceTab">
+         <item>
+            <widget class="ctkCollapsibleButton" name="inferenceCollapsible">
+               <property name="text">
+                  <string>Inference</string>
+               </property>
+               <layout class="QVBoxLayout" name="inferenceLayout">
+                  <item>
+                     <widget class="QWidget" name="InferenceTabWidget">
+                        <layout class="QVBoxLayout" name="vLayout_inferenceTab">
+                           <item>
+                              <widget class="QWidget" name="inputsCollapsible">
+                                 <layout class="QFormLayout" name="formLayout_inputs">
+                                    <!-- Input -->
+                                    <item row="0" column="0">
+                                       <widget class="QLabel" name="label_input">
+                                          <property name="text">
+                                             <string>Input volume</string>
+                                          </property>
+                                       </widget>
+                                    </item>
+                                    <item row="0" column="1">
+                                       <widget class="qMRMLNodeComboBox" name="inputVolumeSelector">
+                                          <property name="toolTip">
+                                             <string>Pick the input to the algorithm.</string>
+                                          </property>
+                                          <property name="nodeTypes">
+                                             <stringlist>
+                                                <string>vtkMRMLScalarVolumeNode</string>
+                                             </stringlist>
+                                          </property>
+                                          <property name="showChildNodeTypes">
+                                             <bool>false</bool>
+                                          </property>
+                                          <property name="addEnabled">
+                                             <bool>false</bool>
+                                          </property>
+                                          <property name="removeEnabled">
+                                             <bool>false</bool>
+                                          </property>
+                                       </widget>
+                                    </item>
+                                    <!-- Model row -->
+                                    <item row="1" column="0">
+                                       <widget class="QLabel" name="label_model">
+                                          <property name="text">
+                                             <string>Model</string>
+                                          </property>
+                                       </widget>
+                                    </item>
+                                    <item row="1" column="1">
+                                       <layout class="QHBoxLayout" name="hLayout_model">
+                                          <item>
+                                             <widget class="QComboBox" name="modelComboBox">
+                                                <property name="toolTip">
+                                                   <string>Choose model</string>
+                                                </property>
+                                             </widget>
+                                          </item>
+                                          <item>
+                                             <widget class="QPushButton" name="publishButton">
+                                                <property name="visible">
+                                                   <bool>false</bool>
+                                                </property>
+                                                <property name="toolTip">
+                                                   <string>Publish model</string>
+                                                </property>
+                                                <property name="text">
+                                                   <string>Publish</string>
+                                                </property>
+                                                <property name="autoDefault">
+                                                   <bool>false</bool>
+                                                </property>
+                                                <property name="default">
+                                                   <bool>false</bool>
+                                                </property>
+                                                <property name="maximumSize">
+                                                   <size>
+                                                      <width>100</width>
+                                                      <height>24</height>
+                                                   </size>
+                                                </property>
+                                                <property name="minimumSize">
+                                                   <size>
+                                                      <width>80</width>
+                                                      <height>24</height>
+                                                   </size>
+                                                </property>
+                                             </widget>
+                                          </item>
+                                          <item>
+                                             <widget class="QPushButton" name="configButton">
+                                                <property name="toolTip">
+                                                   <string>Open config folder</string>
+                                                </property>
+                                                <property name="iconSize">
+                                                   <size>
+                                                      <width>16</width>
+                                                      <height>16</height>
+                                                   </size>
+                                                </property>
+                                                <property name="flat">
+                                                   <bool>true</bool>
+                                                </property>
+                                                <property name="text">
+                                                   <string />
+                                                </property>
+                                                <property name="maximumSize">
+                                                   <size>
+                                                      <width>24</width>
+                                                      <height>24</height>
+                                                   </size>
+                                                </property>
+                                                <property name="minimumSize">
+                                                   <size>
+                                                      <width>24</width>
+                                                      <height>24</height>
+                                                   </size>
+                                                </property>
+                                                <property name="styleSheet">
+                                                   <string notr="true">padding:0px; margin:0px;</string>
+                                                </property>
+                                             </widget>
+                                          </item>
+                                          <item>
+                                             <widget class="QPushButton" name="removeModelButton">
+                                                <property name="toolTip">
+                                                   <string>Remove model</string>
+                                                </property>
+                                                <property name="icon">
+                                                   <iconset>
+                                                      <normaloff>:/Icons/minus.png</normaloff>
+                                                      :/Icons/minus.png
+                                                   </iconset>
+                                                </property>
+                                                <property name="iconSize">
+                                                   <size>
+                                                      <width>16</width>
+                                                      <height>16</height>
+                                                   </size>
+                                                </property>
+                                                <property name="flat">
+                                                   <bool>true</bool>
+                                                </property>
+                                                <property name="text">
+                                                   <string />
+                                                </property>
+                                                <property name="maximumSize">
+                                                   <size>
+                                                      <width>24</width>
+                                                      <height>24</height>
+                                                   </size>
+                                                </property>
+                                                <property name="minimumSize">
+                                                   <size>
+                                                      <width>24</width>
+                                                      <height>24</height>
+                                                   </size>
+                                                </property>
+                                                <property name="styleSheet">
+                                                   <string notr="true">padding:0px; margin:0px;</string>
+                                                </property>
+                                             </widget>
+                                          </item>
+                                          <item>
+                                             <widget class="QPushButton" name="addModelButton">
+                                                <property name="toolTip">
+                                                   <string>Add model</string>
+                                                </property>
+                                                <property name="icon">
+                                                   <iconset>
+                                                      <normaloff>:/Icons/plus.png</normaloff>
+                                                      :/Icons/plus.png
+                                                   </iconset>
+                                                </property>
+                                                <property name="iconSize">
+                                                   <size>
+                                                      <width>16</width>
+                                                      <height>16</height>
+                                                   </size>
+                                                </property>
+                                                <property name="flat">
+                                                   <bool>true</bool>
+                                                </property>
+                                                <property name="text">
+                                                   <string />
+                                                </property>
+                                                <property name="maximumSize">
+                                                   <size>
+                                                      <width>24</width>
+                                                      <height>24</height>
+                                                   </size>
+                                                </property>
+                                                <property name="minimumSize">
+                                                   <size>
+                                                      <width>24</width>
+                                                      <height>24</height>
+                                                   </size>
+                                                </property>
+                                                <property name="styleSheet">
+                                                   <string notr="true">padding:0px; margin:0px;</string>
+                                                </property>
+                                             </widget>
+                                          </item>
+                                       </layout>
+                                    </item>
+                                    <!-- Description -->
+                                    <item row="2" column="1">
+                                       <layout class="QVBoxLayout" name="descriptionLayout">
+                                          <property name="spacing">
+                                             <number>0</number>
+                                          </property>
+                                          <property name="leftMargin">
+                                             <number>0</number>
+                                          </property>
+                                          <property name="topMargin">
+                                             <number>0</number>
+                                          </property>
+                                          <property name="rightMargin">
+                                             <number>0</number>
+                                          </property>
+                                          <property name="bottomMargin">
+                                             <number>0</number>
+                                          </property>
+                                          <item>
+                                             <widget class="QLabel" name="modelDescriptionLabel">
+                                                <property name="wordWrap">
+                                                   <bool>true</bool>
+                                                </property>
+                                                <property name="alignment">
+                                                   <set>Qt::AlignTop|Qt::AlignLeft</set>
+                                                </property>
+                                                <property name="styleSheet">
+                                                   <string notr="true">QLabel{margin:0;padding:0;border:none;background:transparent;}</string>
+                                                </property>
+                                             </widget>
+                                          </item>
+                                          <item alignment="Qt::AlignLeft">
+                                             <widget class="QPushButton" name="toggleDescriptionButton">
+                                                <property name="text">
+                                                   <string>More ▼</string>
+                                                </property>
+                                                <property name="flat">
+                                                   <bool>true</bool>
+                                                </property>
+                                                <property name="maximumWidth">
+                                                   <number>60</number>
+                                                </property>
+                                                <property name="styleSheet">
+                                                   <string notr="true">QPushButton{padding:0;margin:0;color:#0078d4;text-decoration:underline;}</string>
+                                                </property>
+                                             </widget>
+                                          </item>
+                                       </layout>
+                                    </item>
+                                    <!-- Sampling -->
+                                    <item row="3" column="0">
+                                       <widget class="QLabel" name="label_stochastic">
+                                          <property name="margin">
+                                             <number>0</number>
+                                          </property>
+                                          <property name="text">
+                                             <string>Sampling</string>
+                                          </property>
+                                       </widget>
+                                    </item>
+                                    <item row="3" column="1">
+                                       <layout class="QHBoxLayout" name="hLayout_sampling">
+                                          <property name="spacing">
+                                             <number>20</number>
+                                          </property>
+                                          <!-- Ensemble -->
+                                          <item>
+                                             <layout class="QHBoxLayout" name="hLayout_ensemble">
+                                                <property name="spacing">
+                                                   <number>2</number>
+                                                </property>
+                                                <item>
+                                                   <widget class="QLabel" name="label_ensemble">
+                                                      <property name="text">
+                                                         <string>Ensemble:</string>
+                                                      </property>
+                                                   </widget>
+                                                </item>
+                                                <item>
+                                                   <widget class="QSpinBox" name="ensembleSpinBox">
+                                                      <property name="toolTip">
+                                                         <string>Number of models in the ensemble (&gt;=1 means enabled).</string>
+                                                      </property>
+                                                      <property name="minimum">
+                                                         <number>1</number>
+                                                      </property>
+                                                      <property name="maximum">
+                                                         <number>64</number>
+                                                      </property>
+                                                      <property name="value">
+                                                         <number>0</number>
+                                                      </property>
+                                                      <property name="prefix">
+                                                         <string>#</string>
+                                                      </property>
+                                                      <property name="maximumWidth">
+                                                         <number>70</number>
+                                                      </property>
+                                                   </widget>
+                                                </item>
+                                             </layout>
+                                          </item>
+                                          <!-- TTA -->
+                                          <item>
+                                             <layout class="QHBoxLayout" name="hLayout_tta">
+                                                <property name="spacing">
+                                                   <number>2</number>
+                                                </property>
+                                                <item>
+                                                   <widget class="QLabel" name="label_tta">
+                                                      <property name="text">
+                                                         <string>TTA:</string>
+                                                      </property>
+                                                   </widget>
+                                                </item>
+                                                <item>
+                                                   <widget class="QSpinBox" name="ttaSpinBox">
+                                                      <property name="toolTip">
+                                                         <string>Number of test-time augmentations (&gt;=1 means enabled).</string>
+                                                      </property>
+                                                      <property name="minimum">
+                                                         <number>0</number>
+                                                      </property>
+                                                      <property name="maximum">
+                                                         <number>128</number>
+                                                      </property>
+                                                      <property name="value">
+                                                         <number>0</number>
+                                                      </property>
+                                                      <property name="prefix">
+                                                         <string>#</string>
+                                                      </property>
+                                                      <property name="maximumWidth">
+                                                         <number>70</number>
+                                                      </property>
+                                                   </widget>
+                                                </item>
+                                             </layout>
+                                          </item>
+                                          <!-- MC Dropout -->
+                                          <item>
+                                             <layout class="QHBoxLayout" name="hLayout_mcdo">
+                                                <property name="spacing">
+                                                   <number>2</number>
+                                                </property>
+                                                <item>
+                                                   <widget class="QLabel" name="label_mcdo">
+                                                      <property name="text">
+                                                         <string>MC Dropout:</string>
+                                                      </property>
+                                                   </widget>
+                                                </item>
+                                                <item>
+                                                   <widget class="QSpinBox" name="mcDropoutSpinBox">
+                                                      <property name="toolTip">
+                                                         <string>Number of dropout-enabled forward passes (&gt;=1 means enabled).</string>
+                                                      </property>
+                                                      <property name="minimum">
+                                                         <number>0</number>
+                                                      </property>
+                                                      <property name="maximum">
+                                                         <number>256</number>
+                                                      </property>
+                                                      <property name="value">
+                                                         <number>0</number>
+                                                      </property>
+                                                      <property name="prefix">
+                                                         <string>#</string>
+                                                      </property>
+                                                      <property name="maximumWidth">
+                                                         <number>70</number>
+                                                      </property>
+                                                   </widget>
+                                                </item>
+                                             </layout>
+                                          </item>
+                                       </layout>
+                                    </item>
+                                    <!-- Output -->
+                                    <item row="4" column="0">
+                                       <widget class="QLabel" name="label_output">
+                                          <property name="text">
+                                             <string>Output Volume</string>
+                                          </property>
+                                       </widget>
+                                    </item>
+                                    <item row="4" column="1">
+                                       <widget class="qMRMLNodeComboBox" name="outputVolumeSelector">
+                                          <property name="toolTip">
+                                             <string>This will store the output result.</string>
+                                          </property>
+                                          <property name="nodeTypes">
+                                             <stringlist>
+                                                <string>vtkMRMLScalarVolumeNode</string>
+                                             </stringlist>
+                                          </property>
+                                          <property name="showChildNodeTypes">
+                                             <bool>false</bool>
+                                          </property>
+                                          <property name="noneEnabled">
+                                             <bool>true</bool>
+                                          </property>
+                                          <property name="addEnabled">
+                                             <bool>true</bool>
+                                          </property>
+                                          <property name="removeEnabled">
+                                             <bool>true</bool>
+                                          </property>
+                                          <property name="editEnabled">
+                                             <bool>true</bool>
+                                          </property>
+                                          <property name="renameEnabled">
+                                             <bool>true</bool>
+                                          </property>
+                                          <property name="noneDisplay">
+                                             <string>Create new volume on Run</string>
+                                          </property>
+                                       </widget>
+                                    </item>
+                                 </layout>
+                              </widget>
+                           </item>
+                           <!-- ===== Run row ===== -->
+                           <item>
+                              <layout class="QHBoxLayout" name="runRow">
+                                 <item>
+                                    <widget class="QPushButton" name="runInferenceButton">
+                                       <property name="enabled">
+                                          <bool>false</bool>
+                                       </property>
+                                       <property name="toolTip">
+                                          <string>Start processing.</string>
+                                       </property>
+                                       <property name="text">
+                                          <string>Run</string>
+                                       </property>
+                                       <property name="default">
+                                          <bool>true</bool>
+                                       </property>
+                                    </widget>
+                                 </item>
+                              </layout>
+                           </item>
+                        </layout>
+                     </widget>
+                  </item>
+               </layout>
+            </widget>
+         </item>
+         <!-- Evaluation panel -->
+         <item>
+            <widget class="ctkCollapsibleButton" name="evaluationCollapsible">
+               <property name="text">
+                  <string>Evaluation</string>
+               </property>
+               <property name="collapsed">
+                  <bool>true</bool>
+               </property>
+               <layout class="QVBoxLayout" name="evaluationLayout">
+                  <item>
+                     <widget class="QTabWidget" name="qaTabWidget">
+                        <widget class="QWidget" name="withRefTab">
+                           <attribute name="title">
+                              <string>With reference</string>
+                           </attribute>
+                           <layout class="QFormLayout" name="formLayout_qa_ref">
+                              <property name="horizontalSpacing">
+                                 <number>8</number>
+                              </property>
+                              <property name="verticalSpacing">
+                                 <number>4</number>
+                              </property>
+                              <!-- sCT volume -->
+                              <item row="0" column="0">
+                                 <widget class="QLabel" name="label_outputVolume">
+                                    <property name="text">
+                                       <string>Output Volume</string>
+                                    </property>
+                                 </widget>
+                              </item>
+                              <item row="0" column="1">
+                                 <widget class="qMRMLNodeComboBox" name="inputVolumeEvaluationSelector">
+                                    <property name="nodeTypes">
+                                       <stringlist>
+                                          <string>vtkMRMLScalarVolumeNode</string>
+                                       </stringlist>
+                                    </property>
+                                    <property name="addEnabled">
+                                       <bool>false</bool>
+                                    </property>
+                                    <property name="removeEnabled">
+                                       <bool>false</bool>
+                                    </property>
+                                 </widget>
+                              </item>
+                              <!-- Reference volume -->
+                              <item row="1" column="0">
+                                 <widget class="QLabel" name="label_refVolume">
+                                    <property name="text">
+                                       <string>Reference volume</string>
+                                    </property>
+                                 </widget>
+                              </item>
+                              <item row="1" column="1">
+                                 <widget class="qMRMLNodeComboBox" name="referenceVolumeSelector">
+                                    <property name="nodeTypes">
+                                       <stringlist>
+                                          <string>vtkMRMLScalarVolumeNode</string>
+                                       </stringlist>
+                                    </property>
+                                    <property name="addEnabled">
+                                       <bool>false</bool>
+                                    </property>
+                                    <property name="removeEnabled">
+                                       <bool>false</bool>
+                                    </property>
+                                 </widget>
+                              </item>
+                              <!-- Reference mask -->
+                              <item row="2" column="0">
+                                 <widget class="QLabel" name="label_refMask">
+                                    <property name="text">
+                                       <string>Mask (Optional)</string>
+                                    </property>
+                                 </widget>
+                              </item>
+                              <item row="2" column="1">
+                                 <widget class="qMRMLNodeComboBox" name="referenceMaskSelector">
+                                    <property name="nodeTypes">
+                                       <stringlist>
+                                          <string>vtkMRMLLabelMapVolumeNode</string>
+                                          <string>vtkMRMLSegmentationNode</string>
+                                       </stringlist>
+                                    </property>
+                                    <property name="noneEnabled">
+                                       <bool>true</bool>
+                                    </property>
+                                    <property name="noneDisplay">
+                                       <string>None</string>
+                                    </property>
+                                 </widget>
+                              </item>
+                              <item row="3" column="0">
+                                 <widget class="QLabel" name="label_outputTransform">
+                                    <property name="text">
+                                       <string>Transform</string>
+                                    </property>
+                                 </widget>
+                              </item>
+                              <item row="3" column="1">
+                                 <widget class="qMRMLNodeComboBox" name="inputTransformSelector">
+                                    <property name="nodeTypes">
+                                       <stringlist>
+                                          <string>vtkMRMLTransformNode</string>
+                                       </stringlist>
+                                    </property>
+                                    <property name="noneEnabled">
+                                       <bool>true</bool>
+                                    </property>
+                                    <property name="noneDisplay">
+                                       <string>None</string>
+                                    </property>
+                                 </widget>
+                              </item>
+                              <item row="4" column="0" colspan="2">
+                                 <widget class="QWidget" name="withRefMetricsPlaceholder">
+                                    <layout class="QVBoxLayout" name="withRefMetricsLayout" />
+                                 </widget>
+                              </item>
+                           </layout>
+                        </widget>
+                        <widget class="QWidget" name="noRefTab">
+                           <attribute name="title">
+                              <string>No reference (Uncertainty)</string>
+                           </attribute>
+                           <layout class="QFormLayout" name="formLayout_qa_ref">
+                              <property name="horizontalSpacing">
+                                 <number>8</number>
+                              </property>
+                              <property name="verticalSpacing">
+                                 <number>4</number>
+                              </property>
+                              <!-- sCT volume -->
+                              <item row="0" column="0">
+                                 <widget class="QLabel" name="label_outputVolume">
+                                    <property name="text">
+                                       <string>InferenceStack</string>
+                                    </property>
+                                 </widget>
+                              </item>
+                              <item row="0" column="1">
+                                 <widget class="qMRMLNodeComboBox" name="inputVolumeSequenceSelector">
+                                    <property name="nodeTypes">
+                                       <stringlist>
+                                          <string>vtkMRMLSequenceNode</string>
+                                       </stringlist>
+                                    </property>
+                                    <property name="addEnabled">
+                                       <bool>false</bool>
+                                    </property>
+                                    <property name="removeEnabled">
+                                       <bool>false</bool>
+                                    </property>
+                                 </widget>
+                              </item>
+                              <item row="1" column="0" colspan="2">
+                                 <widget class="QWidget" name="noRefMetricsPlaceholder">
+                                    <layout class="QVBoxLayout" name="noRefMetricsLayout" />
+                                 </widget>
+                              </item>
+                           </layout>
+                        </widget>
+                     </widget>
+                  </item>
+                  <item row="3" column="1">
+                     <layout class="QHBoxLayout" name="samplingSummaryRow">
+                        <property name="spacing">
+                           <number>8</number>
+                        </property>
+                        <property name="leftMargin">
+                           <number>0</number>
+                        </property>
+                        <property name="rightMargin">
+                           <number>0</number>
+                        </property>
+                        <property name="topMargin">
+                           <number>4</number>
+                        </property>
+                        <property name="bottomMargin">
+                           <number>0</number>
+                        </property>
+                        <property name="stretch">
+                           <string>1,0,0,0,0,1</string>
+                        </property>
+                        <item>
+                           <spacer name="samplingSummaryLeftSpacer">
+                              <property name="orientation">
+                                 <enum>Qt::Horizontal</enum>
+                              </property>
+                              <property name="sizeHint">
+                                 <size>
+                                    <width>0</width>
+                                    <height>0</height>
+                                 </size>
+                              </property>
+                           </spacer>
+                        </item>
+                        <item>
+                           <widget class="QFrame" name="modelSummaryFrame">
+                              <property name="frameShape">
+                                 <enum>QFrame::StyledPanel</enum>
+                              </property>
+                              <property name="frameShadow">
+                                 <enum>QFrame::Raised</enum>
+                              </property>
+                              <layout class="QHBoxLayout" name="modelSummaryLayout">
+                                 <property name="leftMargin">
+                                    <number>8</number>
+                                 </property>
+                                 <property name="rightMargin">
+                                    <number>8</number>
+                                 </property>
+                                 <property name="topMargin">
+                                    <number>4</number>
+                                 </property>
+                                 <property name="bottomMargin">
+                                    <number>4</number>
+                                 </property>
+                                 <property name="spacing">
+                                    <number>6</number>
+                                 </property>
+                                 <item>
+                                    <widget class="QLabel" name="modelSummaryLabel">
+                                       <property name="text">
+                                          <string>Model:</string>
+                                       </property>
+                                       <property name="styleSheet">
+                                          <string>color: #666;</string>
+                                       </property>
+                                    </widget>
+                                 </item>
+                                 <item>
+                                    <widget class="QLabel" name="modelSummaryValue">
+                                       <property name="text">
+                                          <string>N/A</string>
+                                       </property>
+                                       <property name="styleSheet">
+                                          <string>font-weight: bold;</string>
+                                       </property>
+                                    </widget>
+                                 </item>
+                              </layout>
+                           </widget>
+                        </item>
+                        <item>
+                           <widget class="QFrame" name="ensembleSummaryFrame">
+                              <property name="frameShape">
+                                 <enum>QFrame::StyledPanel</enum>
+                              </property>
+                              <property name="frameShadow">
+                                 <enum>QFrame::Raised</enum>
+                              </property>
+                              <layout class="QHBoxLayout" name="ensembleSummaryLayout">
+                                 <property name="leftMargin">
+                                    <number>8</number>
+                                 </property>
+                                 <property name="rightMargin">
+                                    <number>8</number>
+                                 </property>
+                                 <property name="topMargin">
+                                    <number>4</number>
+                                 </property>
+                                 <property name="bottomMargin">
+                                    <number>4</number>
+                                 </property>
+                                 <item>
+                                    <widget class="QLabel" name="ensembleSummaryLabel">
+                                       <property name="text">
+                                          <string>Ensemble</string>
+                                       </property>
+                                       <property name="alignment">
+                                          <set>Qt::AlignCenter</set>
+                                       </property>
+                                       <property name="styleSheet">
+                                          <string>color: #666;</string>
+                                       </property>
+                                    </widget>
+                                 </item>
+                                 <item>
+                                    <widget class="QLabel" name="ensembleSummaryValue">
+                                       <property name="text">
+                                          <string>#N/A</string>
+                                       </property>
+                                       <property name="alignment">
+                                          <set>Qt::AlignCenter</set>
+                                       </property>
+                                       <property name="font">
+                                          <font>
+                                             <bold>true</bold>
+                                          </font>
+                                       </property>
+                                    </widget>
+                                 </item>
+                              </layout>
+                           </widget>
+                        </item>
+                        <item>
+                           <widget class="QFrame" name="ttaSummaryFrame">
+                              <property name="frameShape">
+                                 <enum>QFrame::StyledPanel</enum>
+                              </property>
+                              <property name="frameShadow">
+                                 <enum>QFrame::Raised</enum>
+                              </property>
+                              <layout class="QHBoxLayout" name="ttaSummaryLayout">
+                                 <property name="leftMargin">
+                                    <number>8</number>
+                                 </property>
+                                 <property name="rightMargin">
+                                    <number>8</number>
+                                 </property>
+                                 <property name="topMargin">
+                                    <number>4</number>
+                                 </property>
+                                 <property name="bottomMargin">
+                                    <number>4</number>
+                                 </property>
+                                 <item>
+                                    <widget class="QLabel" name="ttaSummaryLabel">
+                                       <property name="text">
+                                          <string>TTA</string>
+                                       </property>
+                                       <property name="alignment">
+                                          <set>Qt::AlignCenter</set>
+                                       </property>
+                                       <property name="styleSheet">
+                                          <string>color: #666;</string>
+                                       </property>
+                                    </widget>
+                                 </item>
+                                 <item>
+                                    <widget class="QLabel" name="ttaSummaryValue">
+                                       <property name="text">
+                                          <string>#N/A</string>
+                                       </property>
+                                       <property name="alignment">
+                                          <set>Qt::AlignCenter</set>
+                                       </property>
+                                       <property name="font">
+                                          <font>
+                                             <bold>true</bold>
+                                          </font>
+                                       </property>
+                                    </widget>
+                                 </item>
+                              </layout>
+                           </widget>
+                        </item>
+                        <item>
+                           <widget class="QFrame" name="mcSummaryFrame">
+                              <property name="frameShape">
+                                 <enum>QFrame::StyledPanel</enum>
+                              </property>
+                              <property name="frameShadow">
+                                 <enum>QFrame::Raised</enum>
+                              </property>
+                              <layout class="QHBoxLayout" name="mcSummaryLayout">
+                                 <property name="leftMargin">
+                                    <number>8</number>
+                                 </property>
+                                 <property name="rightMargin">
+                                    <number>8</number>
+                                 </property>
+                                 <property name="topMargin">
+                                    <number>4</number>
+                                 </property>
+                                 <property name="bottomMargin">
+                                    <number>4</number>
+                                 </property>
+                                 <item>
+                                    <widget class="QLabel" name="mcSummaryLabel">
+                                       <property name="text">
+                                          <string>MC Dropout</string>
+                                       </property>
+                                       <property name="alignment">
+                                          <set>Qt::AlignCenter</set>
+                                       </property>
+                                       <property name="styleSheet">
+                                          <string>color: #666;</string>
+                                       </property>
+                                    </widget>
+                                 </item>
+                                 <item>
+                                    <widget class="QLabel" name="mcSummaryValue">
+                                       <property name="text">
+                                          <string>#N/A</string>
+                                       </property>
+                                       <property name="alignment">
+                                          <set>Qt::AlignCenter</set>
+                                       </property>
+                                       <property name="font">
+                                          <font>
+                                             <bold>true</bold>
+                                          </font>
+                                       </property>
+                                    </widget>
+                                 </item>
+                              </layout>
+                           </widget>
+                        </item>
+                        <item>
+                           <spacer name="samplingSummaryRightSpacer">
+                              <property name="orientation">
+                                 <enum>Qt::Horizontal</enum>
+                              </property>
+                              <property name="sizeHint">
+                                 <size>
+                                    <width>0</width>
+                                    <height>0</height>
+                                 </size>
+                              </property>
+                           </spacer>
+                        </item>
+                     </layout>
+                  </item>
+                  <!-- ===== Run row ===== -->
+                  <item row="4" column="0">
+                     <layout class="QHBoxLayout" name="runEvaluationRow">
+                        <item>
+                           <widget class="QPushButton" name="runEvaluationButton">
+                              <property name="enabled">
+                                 <bool>false</bool>
+                              </property>
+                              <property name="toolTip">
+                                 <string>Start evaluation.</string>
+                              </property>
+                              <property name="text">
+                                 <string>Run</string>
+                              </property>
+                              <property name="default">
+                                 <bool>true</bool>
+                              </property>
+                           </widget>
+                        </item>
+                     </layout>
+                  </item>
+               </layout>
+            </widget>
+         </item>
       </layout>
-    </item>
-
-    <!-- TTA -->
-    <item>
-      <layout class="QHBoxLayout" name="hLayout_tta">
-        <property name="spacing"><number>2</number></property>
-
-        <item>
-          <widget class="QLabel" name="label_tta">
-            <property name="text"><string>TTA:</string></property>
-          </widget>
-        </item>
-        <item>
-          <widget class="QSpinBox" name="ttaSpinBox">
-            <property name="toolTip">
-              <string>Number of test-time augmentations (>=1 means enabled).</string>
-            </property>
-            <property name="minimum"><number>0</number></property>
-            <property name="maximum"><number>128</number></property>
-            <property name="value"><number>0</number></property>
-            <property name="prefix"><string>#</string></property>
-            <property name="maximumWidth"><number>70</number></property>
-          </widget>
-        </item>
-
-      </layout>
-    </item>
-
-    <!-- MC Dropout -->
-    <item>
-      <layout class="QHBoxLayout" name="hLayout_mcdo">
-        <property name="spacing"><number>2</number></property>
-
-        <item>
-          <widget class="QLabel" name="label_mcdo">
-            <property name="text"><string>MC Dropout:</string></property>
-          </widget>
-        </item>
-        <item>
-          <widget class="QSpinBox" name="mcDropoutSpinBox">
-            <property name="toolTip">
-              <string>Number of dropout-enabled forward passes (>=1 means enabled).</string>
-            </property>
-            <property name="minimum"><number>0</number></property>
-            <property name="maximum"><number>256</number></property>
-            <property name="value"><number>0</number></property>
-            <property name="prefix"><string>#</string></property>
-            <property name="maximumWidth"><number>70</number></property>
-          </widget>
-        </item>
-
-      </layout>
-    </item>
-
-  </layout>
-</item>
-
-
-
-                <!-- Output -->
-                <item row="4" column="0">
-                <widget class="QLabel" name="label_output">
-                <property name="text"><string>Output Volume</string></property>
-                </widget>
-                </item>
-                <item row="4" column="1">
-                <widget class="qMRMLNodeComboBox" name="outputVolumeSelector">
-                <property name="toolTip"><string>This will store the output result.</string></property>
-                <property name="nodeTypes">
-                    <stringlist><string>vtkMRMLScalarVolumeNode</string></stringlist>
-                </property>
-                <property name="showChildNodeTypes"><bool>false</bool></property>
-                <property name="noneEnabled"><bool>true</bool></property>
-                <property name="addEnabled"><bool>true</bool></property>
-                <property name="removeEnabled"><bool>true</bool></property>
-                <property name="editEnabled"><bool>true</bool></property>
-                <property name="renameEnabled"><bool>true</bool></property>
-                <property name="noneDisplay"><string>Create new volume on Run</string></property>
-                </widget>
-                </item>
-
-                </layout>
-            </widget>
-            </item>
-    <!-- ===== Run row ===== -->
-   <item>
-    <layout class="QHBoxLayout" name="runRow">
-     <item>
-      <widget class="QPushButton" name="runInferenceButton">
-       <property name="enabled"><bool>false</bool></property>
-       <property name="toolTip"><string>Start processing.</string></property>
-       <property name="text"><string>Run</string></property>
-       <property name="default"><bool>true</bool></property>
-      </widget>
-     </item>
-
-    </layout>
-   </item>
-            </layout>
-            </widget>
-        </item>
-             </layout>
-    </widget>
-   </item>
-
-      <!-- Evaluation panel -->
-   <item>
-    <widget class="ctkCollapsibleButton" name="evaluationCollapsible">
-     <property name="text">
-      <string>Evaluation</string>
-     </property>
-     <property name="collapsed">
-  <bool>true</bool>
-</property>
-     <layout class="QVBoxLayout" name="evaluationLayout">
-        <item>
-        <widget class="QTabWidget" name="qaTabWidget">
-          <widget class="QWidget" name="withRefTab">
-            <attribute name="title"><string>With reference</string></attribute>
-            <layout class="QFormLayout" name="formLayout_qa_ref">
-              <property name="horizontalSpacing"><number>8</number></property>
-              <property name="verticalSpacing"><number>4</number></property>
-
-              <!-- sCT volume -->
-              <item row="0" column="0"><widget class="QLabel" name="label_outputVolume"><property name="text"><string>Output Volume</string></property></widget></item>
-              <item row="0" column="1">
-                <widget class="qMRMLNodeComboBox" name="inputVolumeEvaluationSelector">
-                  <property name="nodeTypes"><stringlist><string>vtkMRMLScalarVolumeNode</string></stringlist></property>
-                  <property name="noneEnabled"><bool>true</bool></property>
-                </widget>
-              </item>
-
-              <!-- Reference volume -->
-              <item row="1" column="0"><widget class="QLabel" name="label_refVolume"><property name="text"><string>Reference volume</string></property></widget></item>
-              <item row="1" column="1">
-                <widget class="qMRMLNodeComboBox" name="referenceVolumeSelector">
-                  <property name="nodeTypes"><stringlist><string>vtkMRMLScalarVolumeNode</string></stringlist></property>
-                  <property name="noneEnabled"><bool>true</bool></property>
-                </widget>
-              </item>
-
-              <!-- Reference mask -->
-              <item row="2" column="0"><widget class="QLabel" name="label_refMask"><property name="text"><string>Mask (Optional)</string></property></widget></item>
-              <item row="2" column="1">
-                <widget class="qMRMLNodeComboBox" name="referenceMaskSelector">
-                  <property name="nodeTypes"><stringlist><string>vtkMRMLLabelMapVolumeNode</string><string>vtkMRMLSegmentationNode</string></stringlist></property>
-                  <property name="noneEnabled"><bool>true</bool></property>
-                  <property name="noneDisplay"><string>None</string></property>
-                </widget>
-              </item>
-
-              <item row="3" column="0"><widget class="QLabel" name="label_outputTransform"><property name="text"><string>Transform</string></property></widget></item>
-              <item row="3" column="1">
-                  <widget class="qMRMLNodeComboBox" name="transformSelector">
-                    <property name="nodeTypes"><stringlist><string>vtkMRMLTransformNode</string></stringlist></property>
-                    <property name="noneEnabled"><bool>true</bool></property>
-                    <property name="noneDisplay"><string>None</string></property>
-                  </widget>
-              </item>
-              <item row="4" column="0" colspan="2">
-                  <widget class="QWidget" name="withRefMetricsPlaceholder">
-                    <layout class="QVBoxLayout" name="withRefMetricsLayout"/>
-                  </widget>
-                </item>
-            </layout>
-          </widget>
-
-          <widget class="QWidget" name="noRefTab">
-            <attribute name="title"><string>No reference (Uncertainty)</string></attribute>
-              <layout class="QFormLayout" name="formLayout_qa_ref">
-                <property name="horizontalSpacing"><number>8</number></property>
-                <property name="verticalSpacing"><number>4</number></property>
-                <!-- sCT volume -->
-                <item row="0" column="0"><widget class="QLabel" name="label_outputVolume"><property name="text"><string>InferenceStack</string></property></widget></item>
-                <item row="0" column="1">
-                  <widget class="qMRMLNodeComboBox" name="inputInferenceStackSelector">
-                    <property name="nodeTypes"><stringlist><string>vtkMRMLScalarVolumeNode</string></stringlist></property>
-                    <property name="noneEnabled"><bool>true</bool></property>
-                  </widget>
-                </item>
-                <item row="1" column="0" colspan="2">
-                  <widget class="QWidget" name="noRefMetricsPlaceholder">
-                    <layout class="QVBoxLayout" name="noRefMetricsLayout"/>
-                  </widget>
-                </item>
-              </layout>
-          </widget>
-
-        </widget>
-      </item>
-
-<item row="3" column="1">
-  <layout class="QHBoxLayout" name="samplingSummaryRow">
-    <property name="spacing">
-      <number>8</number>
-    </property>
-    <property name="leftMargin">
-      <number>0</number>
-    </property>
-    <property name="rightMargin">
-      <number>0</number>
-    </property>
-    <property name="topMargin">
-      <number>4</number>
-    </property>
-    <property name="bottomMargin">
-      <number>0</number>
-    </property>
-    <property name="stretch">
-      <string>1,0,0,0,0,1</string>
-    </property>
-
-    <item>
-      <spacer name="samplingSummaryLeftSpacer">
-        <property name="orientation">
-          <enum>Qt::Horizontal</enum>
-        </property>
-        <property name="sizeHint">
-          <size>
-            <width>0</width>
-            <height>0</height>
-          </size>
-        </property>
-      </spacer>
-    </item>
-
-    <item>
-  <widget class="QFrame" name="modelSummaryFrame">
-    <property name="frameShape"><enum>QFrame::StyledPanel</enum></property>
-    <property name="frameShadow"><enum>QFrame::Raised</enum></property>
-
-    <layout class="QHBoxLayout" name="modelSummaryLayout">
-      <property name="leftMargin"><number>8</number></property>
-      <property name="rightMargin"><number>8</number></property>
-      <property name="topMargin"><number>4</number></property>
-      <property name="bottomMargin"><number>4</number></property>
-      <property name="spacing"><number>6</number></property>
-
-      <item>
-        <widget class="QLabel" name="modelSummaryLabel">
-          <property name="text"><string>Model:</string></property>
-          <property name="styleSheet">
-            <string>color: #666;</string>
-          </property>
-        </widget>
-      </item>
-
-      <item>
-        <widget class="QLabel" name="modelSummaryValue">
-          <property name="text"><string>N/A</string></property>
-          <property name="styleSheet">
-            <string>font-weight: bold;</string>
-          </property>
-        </widget>
-      </item>
-
-    </layout>
-  </widget>
-</item>
-
-
-    <item>
-      <widget class="QFrame" name="ensembleSummaryFrame">
-        <property name="frameShape">
-          <enum>QFrame::StyledPanel</enum>
-        </property>
-        <property name="frameShadow">
-          <enum>QFrame::Raised</enum>
-        </property>
-        <layout class="QHBoxLayout" name="ensembleSummaryLayout">
-          <property name="leftMargin"><number>8</number></property>
-          <property name="rightMargin"><number>8</number></property>
-          <property name="topMargin"><number>4</number></property>
-          <property name="bottomMargin"><number>4</number></property>
-
-          <item>
-            <widget class="QLabel" name="ensembleSummaryLabel">
-              <property name="text">
-                <string>Ensemble</string>
-              </property>
-              <property name="alignment">
-                <set>Qt::AlignCenter</set>
-              </property>
-              <property name="styleSheet">
-                <string>color: #666;</string>
-              </property>
-            </widget>
-          </item>
-          <item>
-            <widget class="QLabel" name="ensembleSummaryValue">
-              <property name="text">
-                <string>#N/A</string>
-              </property>
-              <property name="alignment">
-                <set>Qt::AlignCenter</set>
-              </property>
-              <property name="font">
-                <font>
-                  <bold>true</bold>
-                </font>
-              </property>
-            </widget>
-          </item>
-        </layout>
-      </widget>
-    </item>
-
-    <item>
-      <widget class="QFrame" name="ttaSummaryFrame">
-        <property name="frameShape">
-          <enum>QFrame::StyledPanel</enum>
-        </property>
-        <property name="frameShadow">
-          <enum>QFrame::Raised</enum>
-        </property>
-        <layout class="QHBoxLayout" name="ttaSummaryLayout">
-          <property name="leftMargin"><number>8</number></property>
-          <property name="rightMargin"><number>8</number></property>
-          <property name="topMargin"><number>4</number></property>
-          <property name="bottomMargin"><number>4</number></property>
-
-          <item>
-            <widget class="QLabel" name="ttaSummaryLabel">
-              <property name="text">
-                <string>TTA</string>
-              </property>
-              <property name="alignment">
-                <set>Qt::AlignCenter</set>
-              </property>
-              <property name="styleSheet">
-                <string>color: #666;</string>
-              </property>
-            </widget>
-          </item>
-          <item>
-            <widget class="QLabel" name="ttaSummaryValue">
-              <property name="text">
-                <string>#N/A</string>
-              </property>
-              <property name="alignment">
-                <set>Qt::AlignCenter</set>
-              </property>
-              <property name="font">
-                <font>
-                  <bold>true</bold>
-                </font>
-              </property>
-            </widget>
-          </item>
-        </layout>
-      </widget>
-    </item>
-
-    <item>
-      <widget class="QFrame" name="mcSummaryFrame">
-        <property name="frameShape">
-          <enum>QFrame::StyledPanel</enum>
-        </property>
-        <property name="frameShadow">
-          <enum>QFrame::Raised</enum>
-        </property>
-        <layout class="QHBoxLayout" name="mcSummaryLayout">
-          <property name="leftMargin"><number>8</number></property>
-          <property name="rightMargin"><number>8</number></property>
-          <property name="topMargin"><number>4</number></property>
-          <property name="bottomMargin"><number>4</number></property>
-
-          <item>
-            <widget class="QLabel" name="mcSummaryLabel">
-              <property name="text">
-                <string>MC Dropout</string>
-              </property>
-              <property name="alignment">
-                <set>Qt::AlignCenter</set>
-              </property>
-              <property name="styleSheet">
-                <string>color: #666;</string>
-              </property>
-            </widget>
-          </item>
-          <item>
-            <widget class="QLabel" name="mcSummaryValue">
-              <property name="text">
-                <string>#N/A</string>
-              </property>
-              <property name="alignment">
-                <set>Qt::AlignCenter</set>
-              </property>
-              <property name="font">
-                <font>
-                  <bold>true</bold>
-                </font>
-              </property>
-            </widget>
-          </item>
-        </layout>
-      </widget>
-    </item>
-
-    <item>
-      <spacer name="samplingSummaryRightSpacer">
-        <property name="orientation">
-          <enum>Qt::Horizontal</enum>
-        </property>
-        <property name="sizeHint">
-          <size>
-            <width>0</width>
-            <height>0</height>
-          </size>
-        </property>
-      </spacer>
-    </item>
-  </layout>
-</item>
-
-
-
-      <!-- ===== Run row ===== -->
-                <item  row="4" column="0">
-                    <layout class="QHBoxLayout" name="runEvaluationRow">
-                    <item>
-                    <widget class="QPushButton" name="runEvaluationButton">
-                    <property name="enabled"><bool>false</bool></property>
-                    <property name="toolTip"><string>Start evaluation.</string></property>
-                    <property name="text"><string>Run</string></property>
-                    <property name="default"><bool>true</bool></property>
-                    </widget>
-                    </item>
-
-                    </layout>
-                </item>
-           </layout>
-    </widget>
-   </item>
-  </layout>
- </widget>
-
- <connections>
-  <connection>
-   <sender>KonfAIAppTemplateWidget</sender>
-   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
-   <receiver>inputVolumeSelector</receiver>
-   <slot>setMRMLScene(vtkMRMLScene*)</slot>
-  </connection>
-  <connection>
-   <sender>KonfAIAppTemplateWidget</sender>
-   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
-   <receiver>outputVolumeSelector</receiver>
-   <slot>setMRMLScene(vtkMRMLScene*)</slot>
-  </connection>
-
-  <connection>
-   <sender>KonfAIAppTemplateWidget</sender>
-   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
-   <receiver>inputVolumeEvaluationSelector</receiver>
-   <slot>setMRMLScene(vtkMRMLScene*)</slot>
-  </connection>
-    <connection>
-   <sender>KonfAIAppTemplateWidget</sender>
-   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
-   <receiver>referenceVolumeSelector</receiver>
-   <slot>setMRMLScene(vtkMRMLScene*)</slot>
-  </connection>
-
-  <connection>
-   <sender>KonfAIAppTemplateWidget</sender>
-   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
-   <receiver>referenceMaskSelector</receiver>
-   <slot>setMRMLScene(vtkMRMLScene*)</slot>
-  </connection>
-
-  <connection>
-   <sender>KonfAIAppTemplateWidget</sender>
-   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
-   <receiver>transformSelector</receiver>
-   <slot>setMRMLScene(vtkMRMLScene*)</slot>
-  </connection>
-
-    <connection>
-   <sender>KonfAIAppTemplateWidget</sender>
-   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
-   <receiver>inputInferenceStackSelector</receiver>
-   <slot>setMRMLScene(vtkMRMLScene*)</slot>
-  </connection>
-
- </connections>
-
- <!-- Custom widgets -->
- <customwidgets>
-  <customwidget>
-   <class>qMRMLNodeComboBox</class><extends>QWidget</extends>
-   <header>qMRMLWidgets/qMRMLNodeComboBox.h</header>
-  </customwidget>
- </customwidgets>
-
- <!-- Ressources -->
- <resources>
-  <include location="../Resources.qrc"/>
- </resources>
+   </widget>
+   <connections>
+      <connection>
+         <sender>KonfAIAppTemplateWidget</sender>
+         <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+         <receiver>inputVolumeSelector</receiver>
+         <slot>setMRMLScene(vtkMRMLScene*)</slot>
+      </connection>
+      <connection>
+         <sender>KonfAIAppTemplateWidget</sender>
+         <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+         <receiver>outputVolumeSelector</receiver>
+         <slot>setMRMLScene(vtkMRMLScene*)</slot>
+      </connection>
+      <connection>
+         <sender>KonfAIAppTemplateWidget</sender>
+         <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+         <receiver>inputVolumeEvaluationSelector</receiver>
+         <slot>setMRMLScene(vtkMRMLScene*)</slot>
+      </connection>
+      <connection>
+         <sender>KonfAIAppTemplateWidget</sender>
+         <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+         <receiver>referenceVolumeSelector</receiver>
+         <slot>setMRMLScene(vtkMRMLScene*)</slot>
+      </connection>
+      <connection>
+         <sender>KonfAIAppTemplateWidget</sender>
+         <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+         <receiver>referenceMaskSelector</receiver>
+         <slot>setMRMLScene(vtkMRMLScene*)</slot>
+      </connection>
+      <connection>
+         <sender>KonfAIAppTemplateWidget</sender>
+         <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+         <receiver>inputTransformSelector</receiver>
+         <slot>setMRMLScene(vtkMRMLScene*)</slot>
+      </connection>
+      <connection>
+         <sender>KonfAIAppTemplateWidget</sender>
+         <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+         <receiver>inputVolumeSequenceSelector</receiver>
+         <slot>setMRMLScene(vtkMRMLScene*)</slot>
+      </connection>
+   </connections>
+   <!-- Custom widgets -->
+   <customwidgets>
+      <customwidget>
+         <class>qMRMLNodeComboBox</class>
+         <extends>QWidget</extends>
+         <header>qMRMLWidgets/qMRMLNodeComboBox.h</header>
+      </customwidget>
+   </customwidgets>
+   <!-- Ressources -->
+   <resources>
+      <include location="../Resources.qrc" />
+   </resources>
 </ui>
