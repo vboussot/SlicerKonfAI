@@ -4,7 +4,7 @@ try:
     from konfai.evaluator import Statistics
 except ImportError:
     # Install KonfAI inside Slicer if it is not available yet
-    slicer.util.pip_install("konfai==1.4.0")
+    slicer.util.pip_install("konfai==1.4.1")
     from konfai.evaluator import Statistics
 
 import itertools
@@ -440,6 +440,12 @@ class AppTemplateWidget(QWidget):
         else:
             return None
 
+    def get_device(self) -> str | None:
+        if self._parameter_node is not None and self._parameter_node.GetParameter("Device") != "None":
+            return self._parameter_node.GetParameter("Device")
+        else:
+            return None
+
     def set_running(self, state: bool) -> None:
         """
         Update the 'is_running' flag in the parameter node.
@@ -557,12 +563,12 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         super().__init__(name, slicer.util.loadUI(resource_path("UI/KonfAIAppTemplate.ui")))
         self._konfai_repo_list = konfai_repo_list
         # Attach metrics panels in both QA contexts: reference-based and reference-free
-        self.evaluationPanel = KonfAIMetricsPanel()
-        self.ui.withRefMetricsPlaceholder.layout().addWidget(self.evaluationPanel)
-        self.uncertaintyPanel = KonfAIMetricsPanel()
-        self.ui.noRefMetricsPlaceholder.layout().addWidget(self.uncertaintyPanel)
+        self.evaluation_panel = KonfAIMetricsPanel()
+        self.ui.withRefMetricsPlaceholder.layout().addWidget(self.evaluation_panel)
+        self.uncertainty_panel = KonfAIMetricsPanel()
+        self.ui.noRefMetricsPlaceholder.layout().addWidget(self.uncertainty_panel)
 
-        self.description_expanded = False
+        self._description_expanded = False
 
         settings = QSettings()
         raw = settings.value(f"KonfAI-Settings/{name}/Models")
@@ -710,16 +716,17 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.on_model_selected()
 
     def initialize_parameter_node(self) -> None:
-        self._initialized = False
         """
         Initialize the parameter node with default values for this app
         (input volume, model ID, ensemble/TTA/MC-dropout parameters).
         """
+        self._initialized = False
+
         # Select default input nodes if nothing is selected yet
-        if not self.get_parameter("InputVolume"):
+        if self.get_parameter_node("InputVolume") is None:
             first_volume_node = slicer.mrmlScene.GetFirstNodeByClass("vtkMRMLScalarVolumeNode")
             if first_volume_node and self._parameter_node is not None:
-                self._parameter_node.SetNodeReferenceID("InputVolume", first_volume_node.GetID())
+                self._parameter_node.SetNodeReferenceID(f"{self._name}/InputVolume", first_volume_node.GetID())
 
         # Set default model if none is stored yet
         if not self.get_parameter("Model"):
@@ -845,23 +852,21 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         if self._parameter_node is None or not self._initialized:
             return
         was_modified = self._parameter_node.StartModify()
-        try:
-            self.set_parameter_node("InputVolume", self.ui.inputVolumeSelector.currentNodeID)
+        self.set_parameter_node("InputVolume", self.ui.inputVolumeSelector.currentNodeID)
 
-            self.set_parameter_node("OutputVolume", self.ui.outputVolumeSelector.currentNodeID)
+        self.set_parameter_node("OutputVolume", self.ui.outputVolumeSelector.currentNodeID)
 
-            self.set_parameter_node("ReferenceVolume", self.ui.referenceVolumeSelector.currentNodeID)
-            self.set_parameter_node("InputVolumeEvaluation", self.ui.inputVolumeEvaluationSelector.currentNodeID)
+        self.set_parameter_node("ReferenceVolume", self.ui.referenceVolumeSelector.currentNodeID)
+        self.set_parameter_node("InputVolumeEvaluation", self.ui.inputVolumeEvaluationSelector.currentNodeID)
 
-            self.set_parameter_node("ReferenceMask", self.ui.referenceMaskSelector.currentNodeID)
-            self.set_parameter_node("InputTransform", self.ui.inputTransformSelector.currentNodeID)
+        self.set_parameter_node("ReferenceMask", self.ui.referenceMaskSelector.currentNodeID)
+        self.set_parameter_node("InputTransform", self.ui.inputTransformSelector.currentNodeID)
 
-            self.set_parameter_node(
-                "InputVolumeSequence",
-                self.ui.inputVolumeSequenceSelector.currentNodeID,
-            )
-        finally:
-            self._parameter_node.EndModify(was_modified)
+        self.set_parameter_node(
+            "InputVolumeSequence",
+            self.ui.inputVolumeSequenceSelector.currentNodeID,
+        )
+        self._parameter_node.EndModify(was_modified)
 
     def on_model_selected(self) -> None:
         """
@@ -881,7 +886,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.ui.removeModelButton.setEnabled(model.get_name().split(":")[0] not in self._konfai_repo_list)
 
         # Reset description expansion state and update description label
-        self.description_expanded = False
+        self._description_expanded = False
         self.on_toggle_description()
 
         # Update ensemble / TTA / MC-dropout limits
@@ -921,14 +926,14 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         if not model:
             return
 
-        if self.description_expanded:
+        if self._description_expanded:
             self.ui.modelDescriptionLabel.setText(model.get_description())
             self.ui.toggleDescriptionButton.setText("Less ▲")
         else:
             self.ui.modelDescriptionLabel.setText(model.get_short_description())
             self.ui.toggleDescriptionButton.setText("More ▼")
 
-        self.description_expanded = not self.description_expanded
+        self._description_expanded = not self._description_expanded
 
     def on_remove_model(self) -> None:
         """
@@ -1174,6 +1179,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         """
         Run or stop evaluation / uncertainty estimation depending on the current QA tab.
         """
+        self.evaluation_panel.clearImagesList()
+        self.uncertainty_panel.clearImagesList()
         if self.ui.qaTabWidget.currentWidget().name == "withRefTab":
             self.on_run_button(self.evaluation)
         else:
@@ -1197,9 +1204,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
           - Call `konfai-apps eval` in the temporary work directory
           - Read resulting JSON metrics and MHA images and display them in the panel
         """
-        self.evaluationPanel.clear_images_list()
-        self.evaluationPanel.clear_metrics()
-        self.uncertaintyPanel.clear_images_list()
+        self.evaluation_panel.clear_metrics()
 
         # Ensure we have a transform node; if not, create an identity transform
         if not self.ui.inputTransformSelector.currentNode():
@@ -1276,8 +1281,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             args += ["--mask", "Mask.mha"]
 
         # Select device backend from parameter node (GPU indices or CPU fallback)
-        if self._parameter_node is not None and self._parameter_node.GetParameter("Device") != "None":
-            args += ["--gpu", self._parameter_node.GetParameter("Device")]
+        if self.get_device():
+            args += ["--gpu", self.get_device()]
         else:
             args += ["--cpu", "1"]
 
@@ -1297,10 +1302,10 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
             # Read the first JSON metrics file found in the Evaluation directory
             statistics = Statistics(next((self._work_dir / "Evaluation").rglob("*.json")))
-            self.evaluationPanel.set_metrics(statistics.read())
+            self.evaluation_panel.set_metrics(statistics.read())
 
             # Populate the image list with all .mha images in the Evaluation folder
-            self.evaluationPanel.refresh_images_list(Path(next((self._work_dir / "Evaluation").rglob("*.mha")).parent))
+            self.evaluation_panel.refresh_images_list(Path(next((self._work_dir / "Evaluation").rglob("*.mha")).parent))
             self._update_logs("Processing finished.")
             self.set_running(False)
 
@@ -1316,9 +1321,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
           - Read resulting JSON metrics and uncertainty maps and display them
         """
         # Clear previous metrics and images in both panels
-        self.evaluationPanel.clear_images_list()
-        self.uncertaintyPanel.clear_images_list()
-        self.uncertaintyPanel.clear_metrics()
+        self.uncertainty_panel.clear_metrics()
 
         model: ModelHF = self.ui.modelComboBox.currentData
         args = [
@@ -1331,8 +1334,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         ]
 
         # Device selection (GPU or CPU)
-        if self._parameter_node is not None and self._parameter_node.GetParameter("Device") != "None":
-            args += ["--gpu", self._parameter_node.GetParameter("Device")]
+        if self.get_device():
+            args += ["--gpu", self.get_device()]
         else:
             args += ["--cpu", "1"]
 
@@ -1363,8 +1366,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                 self.set_running(False)
 
             statistics = Statistics(next((self._work_dir / "Uncertainty").rglob("*.json")))
-            self.uncertaintyPanel.set_metrics(statistics.read())
-            self.uncertaintyPanel.refresh_images_list(
+            self.uncertainty_panel.set_metrics(statistics.read())
+            self.uncertainty_panel.refresh_images_list(
                 Path(next((self._work_dir / "Uncertainty").rglob("*.mha")).parent)
             )
             self._update_logs("Processing finished.")
@@ -1382,10 +1385,10 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
           - Load the resulting MHA files back into Slicer and update display
           - Populate uncertainty panel with the generated stack if available
         """
-        self.evaluationPanel.clear_images_list()
-        self.uncertaintyPanel.clear_images_list()
-        self.evaluationPanel.clear_metrics()
-        self.uncertaintyPanel.clear_metrics()
+        self.evaluation_panel.clear_images_list()
+        self.uncertainty_panel.clear_images_list()
+        self.evaluation_panel.clear_metrics()
+        self.uncertainty_panel.clear_metrics()
 
         model: ModelHF = self.ui.modelComboBox.currentData
         args = [
@@ -1404,9 +1407,9 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         ]
 
         # Device selection (GPU or CPU)
-        if self._parameter_node is not None and self._parameter_node.GetParameter("Device") != "None":
+        if self.get_device():
 
-            args += ["--gpu", self._parameter_node.GetParameter("Device")]
+            args += ["--gpu", self.get_device()]
         else:
             args += ["--cpu", "1"]
         input_node = self.ui.inputVolumeSelector.currentNode()
