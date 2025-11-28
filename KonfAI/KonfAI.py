@@ -188,7 +188,6 @@ class KonfAIMetricsPanel(QWidget):
         metrics : dict[str, float]
             Mapping between metric names and values.
         """
-        self.clear_metrics()
         for key, value in metrics.items():
             self.add_metric(key, value)
 
@@ -1628,11 +1627,11 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         for app in apps:
             self._apps[app._name] = app
             app.app_setup(self.update_logs, self.update_progress, self._parameter_node)
+            app.initialize_parameter_node()
 
         # Enter the first app by default
         app = next(iter(self._apps.values()))
         self._current_konfai_app = app
-        app.initialize_parameter_node()
         app.enter()
 
     def initialize_parameter_node(self):
