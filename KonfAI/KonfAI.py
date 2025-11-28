@@ -4,7 +4,7 @@ try:
     from konfai.evaluator import Statistics
 except ImportError:
     # Install KonfAI inside Slicer if it is not available yet
-    slicer.util.pip_install("konfai==1.4.1")
+    slicer.util.pip_install("konfai==1.4.2")
     from konfai.evaluator import Statistics
 
 import itertools
@@ -1179,8 +1179,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         """
         Run or stop evaluation / uncertainty estimation depending on the current QA tab.
         """
-        self.evaluation_panel.clearImagesList()
-        self.uncertainty_panel.clearImagesList()
+        self.evaluation_panel.clear_images_list()
+        self.uncertainty_panel.clear_images_list()
         if self.ui.qaTabWidget.currentWidget().name == "withRefTab":
             self.on_run_button(self.evaluation)
         else:
