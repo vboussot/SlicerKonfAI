@@ -43,6 +43,21 @@ For more information about KonfAI, visit the project repository: https://github.
 
 ---
 
+
+## 🖼️ Interface Overview
+
+| Inference interface | Uncertainty interface |
+|-------------------------|------------------------|
+| <img src="docs/Inference.png" alt="Synthesis interface" width="100%"> | <img src="docs/Uncertainty.png" alt="Segmentation QA interface" width="100%"> |
+| *Figure 1 – Inference.* | *Figure 2 – Uncertainty estimation.* |
+
+<p align="center">
+  <img src="docs/Evaluation.png" alt="Evaluation interface" width="45%"><br>
+  <em>Figure 3 – Evaluation with reference.</em>
+</p>
+
+---
+
 ## 🚀 Installation
 
 1. Install **3D Slicer ≥ 5.6**  

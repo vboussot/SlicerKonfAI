@@ -1,12 +1,4 @@
-import slicer
-
-try:
-    from konfai.evaluator import Statistics
-except ImportError:
-    # Install KonfAI inside Slicer if it is not available yet
-    slicer.util.pip_install("konfai==1.4.2")
-    from konfai.evaluator import Statistics
-
+# flake8: noqa: E402
 import itertools
 import json
 import os
@@ -16,20 +8,7 @@ from abc import abstractmethod
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-import psutil
-import pynvml
-import SimpleITK as sitk  # noqa: N813
-import sitkUtils
-import vtk
-from konfai.utils.dataset import get_infos, image_to_data
-from konfai.utils.utils import (
-    AppDirectoryError,
-    AppRepositoryHFError,
-    ModelDirectory,
-    ModelHF,
-    get_available_models_on_hf_repo,
-)
+import slicer
 from qt import (
     QCheckBox,
     QCursor,
@@ -59,6 +38,43 @@ from slicer.ScriptedLoadableModule import (
     ScriptedLoadableModuleWidget,
 )
 from slicer.util import VTKObservationMixin
+
+try:
+    from importlib.metadata import PackageNotFoundError, version
+except ImportError:
+    from importlib_metadata import PackageNotFoundError, version  # type: ignore[no-redef]
+
+
+REQUIRED_VERSION = "1.4.2"
+PACKAGE_NAME = "konfai"
+
+try:
+    current_version = version(PACKAGE_NAME)
+    if current_version != REQUIRED_VERSION:
+        raise ImportError("Wrong version")
+except PackageNotFoundError:
+    print("konfai not installed in Slicer.")
+    slicer.util.pip_install(f"{PACKAGE_NAME}=={REQUIRED_VERSION}")
+except ImportError as e:
+    print(e)
+    slicer.util.pip_install(f"{PACKAGE_NAME}=={REQUIRED_VERSION}")
+
+
+import numpy as np
+import psutil
+import pynvml
+import SimpleITK as sitk  # noqa: N813
+import sitkUtils
+import vtk
+from konfai.evaluator import Statistics
+from konfai.utils.dataset import get_infos, image_to_data
+from konfai.utils.utils import (
+    AppDirectoryError,
+    AppRepositoryHFError,
+    ModelDirectory,
+    ModelHF,
+    get_available_models_on_hf_repo,
+)
 from torch.cuda import device_count, get_device_name, is_available
 
 
@@ -610,7 +626,9 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         )
 
         # Reference and transform nodes
-        self.ui.referenceVolumeSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.update_parameter_node_from_gui)
+        self.ui.referenceVolumeSelector.connect(
+            "currentNodeChanged(vtkMRMLNode*)", self.on_input_volume_evaluation_changed
+        )
         self.ui.referenceMaskSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.update_parameter_node_from_gui)
         self.ui.inputTransformSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.update_parameter_node_from_gui)
 
@@ -672,6 +690,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         It attempts to read metadata from the selected node (or its storage),
         updates the model information summary, and synchronizes the parameter node.
         """
+        print(node)
         if node:
             storage = node.GetStorageNode()
             if storage:
@@ -1521,6 +1540,9 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                         "vtkMRMLSequenceBrowserNode", "SitkTransformSequenceBrowser"
                     )
                     browser_node.SetAndObserveMasterSequenceNodeID(sequence_node.GetID())
+                    for key, value in attr.items():
+                        sequence_node.SetAttribute(key.split("_")[0], str(value))
+                    print(sequence_node)
                     break
 
             self._update_logs("Processing finished.")
