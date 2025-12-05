@@ -45,7 +45,7 @@ except ImportError:
     from importlib_metadata import PackageNotFoundError, version  # type: ignore[no-redef]
 
 
-REQUIRED_VERSION = "1.4.2"
+REQUIRED_VERSION = "1.4.3"
 PACKAGE_NAME = "konfai"
 
 try:
@@ -436,26 +436,48 @@ class AppTemplateWidget(QWidget):
         return self._parameter_node is not None and self._parameter_node.GetParameter("is_running") == "True"
 
     def set_parameter(self, key: str, value: str) -> None:
+        """
+        Set a standard parameter (string value) on the associated Slicer parameter node.
+        Parameters are namespaced under this object's name (self._name/<key>).
+        """
         if self._parameter_node is not None:
             self._parameter_node.SetParameter(f"{self._name}/{key}", str(value))
 
     def set_parameter_node(self, key: str, value) -> None:
+        """
+        Set a reference to another MRML node on the parameter node.
+        The reference is stored under a namespaced key (self._name/<key>).
+        'value' must be a valid MRML node ID.
+        """
         if self._parameter_node is not None:
             self._parameter_node.SetNodeReferenceID(f"{self._name}/{key}", value)
 
     def get_parameter(self, key: str) -> str | bool:
+        """
+        Retrieve a parameter value stored under self._name/<key>.
+        Returns a string if found, otherwise False.
+        Useful for checking whether a parameter exists (truthy/falsey behavior).
+        """
         if self._parameter_node is not None:
             return self._parameter_node.GetParameter(f"{self._name}/{key}")
         else:
             return False
 
     def get_parameter_node(self, key: str):
+        """
+        Retrieve a referenced MRML node stored under self._name/<key>.
+        Returns the node object if found, otherwise None.
+        """
         if self._parameter_node is not None:
             return self._parameter_node.GetNodeReference(f"{self._name}/{key}")
         else:
             return None
 
     def get_device(self) -> str | None:
+        """
+        Convenience accessor to retrieve the associated 'Device' parameter.
+        Returns the device string if set and not 'None', otherwise None.
+        """
         if self._parameter_node is not None and self._parameter_node.GetParameter("Device") != "None":
             return self._parameter_node.GetParameter("Device")
         else:
@@ -690,7 +712,6 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         It attempts to read metadata from the selected node (or its storage),
         updates the model information summary, and synchronizes the parameter node.
         """
-        print(node)
         if node:
             storage = node.GetStorageNode()
             if storage:
@@ -1542,7 +1563,6 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                     browser_node.SetAndObserveMasterSequenceNodeID(sequence_node.GetID())
                     for key, value in attr.items():
                         sequence_node.SetAttribute(key.split("_")[0], str(value))
-                    print(sequence_node)
                     break
 
             self._update_logs("Processing finished.")
