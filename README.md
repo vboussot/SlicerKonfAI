@@ -1,5 +1,7 @@
 # SlicerKonfAI
 
+<img src="KonfAI.png" alt="Slicer KonfAI Logo" width="300" align="right">
+
 SlicerKonfAI is a 3D Slicer module that provides a graphical user interface (GUI) for running **KonfAI Apps** directly inside 3D Slicer.
 
 It is designed as the “clinical front-end” for KonfAI: you train and package your models as KonfAI Apps, and SlicerKonfAI lets clinicians load volumes, select an app, run inference, and visualize the outputs in Slicer. It also provides built-in Quality Assurance (QA) tools, including reference-based metrics and reference-free uncertainty estimation.
