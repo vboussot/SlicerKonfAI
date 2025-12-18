@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.5)
 
-project(SlicerKonfAI)
+project(KonfAI)
 
 #-----------------------------------------------------------------------------
 # Extension meta-information
 set(EXTENSION_HOMEPAGE "https://github.com/vboussot/SlicerKonfAI")
-set(EXTENSION_CATEGORY "Deep Learning")
+set(EXTENSION_CATEGORY "Pipelines")
 set(EXTENSION_CONTRIBUTORS "Valentin Boussot (University of Rennes, France)")
 set(EXTENSION_DESCRIPTION "An extension enabling fast and configurable deep learning inference in 3D Slicer using KonfAI models from the Hugging Face repository.")
 set(EXTENSION_ICONURL "https://raw.githubusercontent.com/vboussot/SlicerKonfAI/main/KonfAI.png")
@@ -19,7 +19,7 @@ include(${Slicer_USE_FILE})
 
 #-----------------------------------------------------------------------------
 # Extension modules
-add_subdirectory(SlicerKonfAI)
+add_subdirectory(KonfAI)
 ## NEXT_MODULE
 
 #-----------------------------------------------------------------------------

@@ -90,7 +90,7 @@ class KonfAI(ScriptedLoadableModule):
     def __init__(self, parent):
         ScriptedLoadableModule.__init__(self, parent)
         self.parent.title = _("KonfAI")
-        self.parent.categories = [translate("qSlicerAbstractCoreModule", "Deep Learning")]
+        self.parent.categories = [translate("qSlicerAbstractCoreModule", "Pipelines")]
         self.parent.dependencies = []
         self.parent.contributors = [
             "Valentin Boussot (University of Rennes, France)",
@@ -770,7 +770,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         # Set default model if none is stored yet
         if not self.get_parameter("Model"):
             model: ModelHF = self.ui.modelComboBox.itemData(0)
-            self.set_parameter("Model", model.get_name())
+            if model:
+                self.set_parameter("Model", model.get_name())
 
         # Determine the current model object from the stored parameter if possible
         current_model = None
@@ -779,16 +780,18 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             if model_tmp.get_name() == self.get_parameter("Model"):
                 current_model = model_tmp
                 break
-        if not current_model:
+        if current_model is None:
             current_model = self.ui.modelComboBox.itemData(0)
 
         # Ensemble / TTA / MC-dropout defaults based on model capabilities
         if not self.get_parameter("number_of_ensemble"):
-            self.set_parameter("number_of_ensemble", str(current_model.get_number_of_models()))
+            self.set_parameter(
+                "number_of_ensemble", str(current_model.get_number_of_models()) if current_model else "1"
+            )
         if not self.get_parameter("number_of_tta"):
-            self.set_parameter("number_of_tta", str(current_model.get_maximum_tta()))
+            self.set_parameter("number_of_tta", str(current_model.get_maximum_tta()) if current_model else "0")
         if not self.get_parameter("number_of_mc_dropout"):
-            self.set_parameter("number_of_mc_dropout", str(current_model.get_mc_dropout()))
+            self.set_parameter("number_of_mc_dropout", str(current_model.get_mc_dropout()) if current_model else "0")
         self.initialize_gui_from_parameter_node()
         self._initialized = True
 
