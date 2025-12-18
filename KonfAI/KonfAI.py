@@ -8,7 +8,11 @@ from abc import abstractmethod
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import SimpleITK as sitk  # noqa: N813
+import sitkUtils
 import slicer
+import vtk
 from qt import (
     QCheckBox,
     QCursor,
@@ -39,43 +43,25 @@ from slicer.ScriptedLoadableModule import (
 )
 from slicer.util import VTKObservationMixin
 
-try:
-    from importlib.metadata import PackageNotFoundError, version
-except ImportError:
-    from importlib_metadata import PackageNotFoundError, version  # type: ignore[no-redef]
+KONFAI_REQUIRED_VERSION = "1.4.3"
 
 
-REQUIRED_VERSION = "1.4.3"
-PACKAGE_NAME = "konfai"
+def install_konfai():
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+    except ImportError:
+        from importlib_metadata import PackageNotFoundError, version  # type: ignore[no-redef]
 
-try:
-    current_version = version(PACKAGE_NAME)
-    if current_version != REQUIRED_VERSION:
-        raise ImportError("Wrong version")
-except PackageNotFoundError:
-    print("konfai not installed in Slicer.")
-    slicer.util.pip_install(f"{PACKAGE_NAME}=={REQUIRED_VERSION}")
-except ImportError as e:
-    print(e)
-    slicer.util.pip_install(f"{PACKAGE_NAME}=={REQUIRED_VERSION}")
-
-
-import numpy as np
-import psutil
-import pynvml
-import SimpleITK as sitk  # noqa: N813
-import sitkUtils
-import vtk
-from konfai.evaluator import Statistics
-from konfai.utils.dataset import get_infos, image_to_data
-from konfai.utils.utils import (
-    AppDirectoryError,
-    AppRepositoryHFError,
-    ModelDirectory,
-    ModelHF,
-    get_available_models_on_hf_repo,
-)
-from torch.cuda import device_count, get_device_name, is_available
+    try:
+        current_version = version("konfai")
+        if current_version != KONFAI_REQUIRED_VERSION:
+            raise ImportError("Wrong version")
+    except PackageNotFoundError:
+        print("konfai not installed in Slicer.")
+        slicer.util.pip_install(f"{"konfai"}=={KONFAI_REQUIRED_VERSION}")
+    except ImportError as e:
+        print(e)
+        slicer.util.pip_install(f"{"konfai"}=={KONFAI_REQUIRED_VERSION}")
 
 
 class KonfAI(ScriptedLoadableModule):
@@ -227,6 +213,8 @@ class KonfAIMetricsPanel(QWidget):
         volume_node = slicer.util.loadVolume(full_path)
 
         # Extract KonfAI-related metadata from the image file and attach them as node attributes
+        from konfai.utils.dataset import get_infos
+
         _, attr = get_infos(full_path)
         for key, value in attr.items():
             # Keep only the part before '_' to have simple attribute keys
@@ -613,6 +601,9 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         if raw is not None:
             models_name = json.loads(raw)
 
+        install_konfai()
+        from konfai.utils.utils import AppRepositoryHFError, ModelDirectory, ModelHF, get_available_models_on_hf_repo
+
         default_models_name = []
         for konfai_repo in konfai_repo_list:
             try:
@@ -717,6 +708,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             if storage:
                 path = storage.GetFileName()
                 if path and Path(path).exists():
+                    from konfai.utils.dataset import get_infos
+
                     _, attr = get_infos(path)
                     if (
                         "Model" in attr
@@ -769,14 +762,14 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         # Set default model if none is stored yet
         if not self.get_parameter("Model"):
-            model: ModelHF = self.ui.modelComboBox.itemData(0)
+            model = self.ui.modelComboBox.itemData(0)
             if model:
                 self.set_parameter("Model", model.get_name())
 
         # Determine the current model object from the stored parameter if possible
         current_model = None
         for i in range(self.ui.modelComboBox.count):
-            model_tmp: ModelHF = self.ui.modelComboBox.itemData(i)
+            model_tmp = self.ui.modelComboBox.itemData(i)
             if model_tmp.get_name() == self.get_parameter("Model"):
                 current_model = model_tmp
                 break
@@ -804,7 +797,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         # Search the combo box items for a matching model name
         index = -1
         for i in range(self.ui.modelComboBox.count):
-            model: ModelHF = self.ui.modelComboBox.itemData(i)
+            model = self.ui.modelComboBox.itemData(i)
             if model.get_name() == model_param:
                 index = i
                 break
@@ -919,7 +912,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
           - Adjusts ensemble / TTA / MC-dropout spin box ranges
           - Enables/disables QA options depending on model capabilities
         """
-        model: ModelHF = self.ui.modelComboBox.currentData
+        model = self.ui.modelComboBox.currentData
         if model is None:
             return
 
@@ -964,7 +957,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         """
         Toggle between short and full model description text in the UI.
         """
-        model: ModelHF = self.ui.modelComboBox.currentData
+        model = self.ui.modelComboBox.currentData
         if not model:
             return
 
@@ -984,7 +977,9 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         This is intended for locally added models, not Hugging Face models.
         """
-        model: ModelHF = self.ui.modelComboBox.currentData
+        from konfai.utils.utils import ModelDirectory
+
+        model = self.ui.modelComboBox.currentData
 
         mb = QMessageBox()
         mb.setIcon(QMessageBox.Warning)
@@ -1020,7 +1015,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         The folder is opened in the operating system's default file browser.
         """
-        model: ModelHF = self.ui.modelComboBox.currentData
+        model = self.ui.modelComboBox.currentData
         if model is None:
             return
 
@@ -1051,6 +1046,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         The folder is expected to contain a valid KonfAI model configuration (YAML + weights).
         """
+        from konfai.utils.utils import AppDirectoryError, ModelDirectory
+
         model_dir = QFileDialog.getExistingDirectory(None, "Select Model Folder", os.path.expanduser("~"))
         if not model_dir:
             return
@@ -1105,6 +1102,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         a subdirectory (model name) is selected among the available directories.
         """
         from huggingface_hub import HfApi
+        from konfai.utils.utils import ModelHF
 
         text = QInputDialog().getText(
             self,
@@ -1163,7 +1161,9 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         This helper guides the user through selecting a parent directory,
         naming the fine-tune model folder and creating a basic skeleton with a README.
         """
-        model: ModelHF = self.ui.modelComboBox.currentData
+        from konfai.utils.utils import ModelDirectory
+
+        model = self.ui.modelComboBox.currentData
         if model is None:
             return
 
@@ -1284,7 +1284,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         volume_storage_node.WriteData(self.ui.referenceVolumeSelector.currentNode())
         volume_storage_node.UnRegister(None)
 
-        model: ModelHF = self.ui.modelComboBox.currentData
+        model = self.ui.modelComboBox.currentData
 
         # Build konfai-apps evaluation CLI arguments
         args = [
@@ -1343,6 +1343,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                 return
 
             # Read the first JSON metrics file found in the Evaluation directory
+            from konfai.evaluator import Statistics
+
             statistics = Statistics(next((self._work_dir / "Evaluation").rglob("*.json")))
             self.evaluation_panel.set_metrics(statistics.read())
 
@@ -1365,7 +1367,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         # Clear previous metrics and images in both panels
         self.uncertainty_panel.clear_metrics()
 
-        model: ModelHF = self.ui.modelComboBox.currentData
+        model = self.ui.modelComboBox.currentData
         args = [
             "uncertainty",
             model.get_name(),
@@ -1407,6 +1409,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             if not any((self._work_dir / "Uncertainty").rglob("*.json")):
                 self.set_running(False)
 
+            from konfai.evaluator import Statistics
+
             statistics = Statistics(next((self._work_dir / "Uncertainty").rglob("*.json")))
             self.uncertainty_panel.set_metrics(statistics.read())
             self.uncertainty_panel.refresh_images_list(
@@ -1432,7 +1436,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.evaluation_panel.clear_metrics()
         self.uncertainty_panel.clear_metrics()
 
-        model: ModelHF = self.ui.modelComboBox.currentData
+        model = self.ui.modelComboBox.currentData
         args = [
             "infer",
             model.get_name(),
@@ -1488,6 +1492,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             # Find the first non-stack MHA output file
             for file in (self._work_dir / "Output").rglob("*.mha"):
                 if file.name != "InferenceStack.mha":
+                    from konfai.utils.dataset import image_to_data
+
                     data, attr = image_to_data(sitk.ReadImage(str(file)))
                     break
             if data is None:
@@ -1748,6 +1754,7 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         """
         # CPU fallback
         available_devices: list[tuple[str, str | None]] = [("cpu [slow]", None)]
+        from torch.cuda import device_count, get_device_name, is_available
 
         if is_available():
             # Build combinations of GPU indices, so multi-GPU usage can be exposed
@@ -1791,6 +1798,8 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
 
         If usage exceeds 80%, the progress bar color is set to red.
         """
+        import psutil
+
         ram = psutil.virtual_memory()
         used_gb = (ram.total - ram.available) / (1024**3)
         total_gb = ram.total / (1024**3)
@@ -1828,6 +1837,8 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
             try:
                 used_gb = 0.0
                 total_gb = 0.0
+                import pynvml
+
                 pynvml.nvmlInit()
                 for index in device.split(","):
                     info = pynvml.nvmlDeviceGetMemoryInfo(pynvml.nvmlDeviceGetHandleByIndex(int(index)))
