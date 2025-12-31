@@ -2,9 +2,86 @@
 
 <img src="KonfAI.png" alt="Slicer KonfAI Logo" width="300" align="right">
 
-SlicerKonfAI is a 3D Slicer module that provides a graphical user interface (GUI) for running **KonfAI Apps** directly inside 3D Slicer.
+SlicerKonfAI is a **3D Slicer extension** that provides a graphical user interface (GUI) to run **AI workflows for medical imaging** directly inside Slicer, such as **multi-organ segmentation** and **synthetic CT (sCT) generation**.
 
-It is designed as the “clinical front-end” for KonfAI: you train and package your models as KonfAI Apps, and SlicerKonfAI lets clinicians load volumes, select an app, run inference, and visualize the outputs in Slicer. It also provides built-in Quality Assurance (QA) tools, including reference-based metrics and reference-free uncertainty estimation.
+With SlicerKonfAI, **you can** load patient images, select an AI App, run inference, and immediately visualize results as Slicer volumes or segmentations.  
+It also includes built-in **Quality Assurance (QA)** tools:
+- **Reference-based evaluation** (when ground truth is available)
+- **Reference-free uncertainty estimation** (when no ground truth is available)
+
+> If you are a developer who wants to create or package new Apps, see the **Developer** section below.
+
+---
+
+## 🖼️ Interface Overview
+
+| Inference interface | Uncertainty interface |
+|-------------------------|------------------------|
+| <img src="docs/Inference.png" alt="Synthesis interface" width="100%"> | <img src="docs/Uncertainty.png" alt="Segmentation QA interface" width="100%"> |
+| *Figure 1 – Inference.* | *Figure 2 – Uncertainty estimation.* |
+
+<p align="center">
+  <img src="docs/Evaluation.png" alt="Evaluation interface" width="45%"><br>
+  <em>Figure 3 – Evaluation with reference.</em>
+</p>
+
+---
+
+## ✅ What you can do in 3 minutes (step-by-step tutorial)
+
+This quick tutorial demonstrates the typical clinical workflow: **load → run inference → review results → assess reliability**.
+
+### 1) Install and open the module
+1. Install **3D Slicer ≥ 5.6**
+2. Open **3D Slicer** and go to **Extension Manager**
+3. Search for **KonfAI**
+4. Click **Install**
+5. Restart Slicer and open the **KonfAI** module from the **Pipeline** category
+
+### 2) Load a case
+1. In Slicer, click **DICOM** (or drag-and-drop a NIfTI / NRRD / MHA file)
+2. Load a volume (e.g., `volume.nii.gz`)
+3. Confirm the volume appears in the **Data** module and is visible in the slice views
+
+### 3) Run inference
+1. On KonfAI module go to the **Inference** tab
+2. Select:
+   - **Input volume**: `volume`
+   - **KonfAI App**: choose an app (e.g., *TotalSegmentator* or *MRSegmentator*)
+3. Click **Run**
+4. Wait for completion: outputs are automatically loaded back into Slicer as:
+   - **Segmentation nodes** (organs, anatomical structures, tumors)
+   - **Volume nodes** (probability maps, heatmaps, synthetic CT, etc., depending on the app)
+
+✅ You can now inspect the results in 2D and 3D and adjust visualization (opacity, label colors, 3D rendering).
+
+### 4) QA without reference (uncertainty estimation)
+When no ground truth annotation is available, you can still assess prediction reliability.
+
+1. Go to the **Evaluation** tab and select **No reference (Uncertainty)**
+2. Select the **inference stack volume** generated during prediction
+3. Click **Run**
+4. Review the generated uncertainty outputs (depending on the app), typically:
+   - uncertainty maps / heatmaps
+   - voxel-wise confidence measures
+   - summary metrics
+
+Uncertainty can be computed using:
+- test-time augmentation (TTA)
+- stochastic dropout
+- multi-model ensembling
+
+### 5) QA with reference (optional)
+If a reference annotation (ground truth) is available:
+
+1. Load the reference segmentation or volume
+2. Go to the **Evaluation** tab
+3. Select:
+   - **Output volume**
+   - **Reference volume**
+   - Optional **ROI mask**
+4. Click **Run**
+5. Review quantitative metrics and qualitative overlays inside Slicer
 
 ---
 
@@ -45,34 +122,9 @@ For more information about KonfAI, visit the project repository: https://github.
 
 ---
 
+## 🧑‍💻 Developer documentation
 
-## 🖼️ Interface Overview
-
-| Inference interface | Uncertainty interface |
-|-------------------------|------------------------|
-| <img src="docs/Inference.png" alt="Synthesis interface" width="100%"> | <img src="docs/Uncertainty.png" alt="Segmentation QA interface" width="100%"> |
-| *Figure 1 – Inference.* | *Figure 2 – Uncertainty estimation.* |
-
-<p align="center">
-  <img src="docs/Evaluation.png" alt="Evaluation interface" width="45%"><br>
-  <em>Figure 3 – Evaluation with reference.</em>
-</p>
-
----
-
-## 🚀 Installation
-
-1. Install **3D Slicer ≥ 5.6**  
-2. Clone this repository:
-   ```bash
-   git clone https://github.com/vboussot/SlicerKonfai.git
-   ```
-3. In Slicer, open:  
-   **Edit → Application Settings → Modules → Additional Module Paths**  
-   and add the folder `SlicerKonfai/KonfAI`
-4. Restart Slicer and open the **KonfAI** module in the **Deep Learning** section.
-
-## 🧩 What is a KonfAI App?
+### 🧩 What is a KonfAI App?
 
 A **KonfAI App** is a self-contained workflow package built with KonfAI.  
 It defines how a model is executed, how its outputs are generated, and how optional evaluation or uncertainty workflows are performed.  
@@ -114,7 +166,7 @@ SlicerKonfAI uses this metadata to:
 
 ---
 
-## ⚙️ How SlicerKonfAI runs an App (conceptual)
+### ⚙️ How SlicerKonfAI runs an App (conceptual)
 
 Internally, SlicerKonfAI typically:
 
@@ -141,4 +193,5 @@ Internally, SlicerKonfAI typically:
 > KonfAI = the engine that does all computations.
 
 ---
+
 
