@@ -80,9 +80,7 @@ def ask_user_to_install_dependency(package_label: str, details: str) -> bool:
     mb.setIcon(QMessageBox.Question)
     mb.setWindowTitle("Additional dependency required")
     mb.setText(f"This module requires {package_label}.")
-    mb.setInformativeText(
-        details + "\n\nDo you want to install it now?" + "\n\nIf you choose 'No', the module will close."
-    )
+    mb.setInformativeText(details + "\n\nIf you choose 'No', the module will close.")
     mb.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
     mb.setDefaultButton(QMessageBox.Yes)
     return mb.exec_() == QMessageBox.Yes
@@ -164,6 +162,34 @@ def install_konfai() -> bool:
             "Do not close Slicer during installation.",
         ):
             slicer.util.pip_install(f"konfai=={latest}")
+    if installed is not None:
+        import konfai
+
+        try:
+            konfai.assert_konfai_install()
+        except Exception as e:
+            if not ask_user_to_install_dependency(
+                "KonfAI",
+                "KonfAI is installed but not functional (missing/broken dependencies).\n\n"
+                "Do you want to reinstall KonfAI (and its dependencies) now?\n\n"
+                f"Details:\n{e}",
+            ):
+                slicer.util.selectModule("Data")
+                return False
+            with slicer_wait_popup("KonfAI repair", "Reinstalling KonfAI and dependencies..."):
+
+                slicer.util.pip_install(f"--upgrade --force-reinstall --no-deps konfai=={latest}")
+                slicer.util.pip_install(
+                    "tqdm numpy ruamel.yaml psutil tensorboard "
+                    "SimpleITK lxml h5py nvidia-ml-py requests huggingface_hub"
+                )
+            try:
+                konfai.assert_konfai_install()
+                return True
+            except Exception as e2:
+                slicer.util.errorDisplay("KonfAI was reinstalled but is still not functional.\n\n" f"{e2}")
+                slicer.util.selectModule("Data")
+                return False
     return True
 
 
@@ -841,10 +867,9 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         Re-initializes parameter node, GUI state and ensures model selection
         is consistent when the widget is shown.
         """
+        if not install_konfai():
+            return
         if self.ui.modelComboBox.count == 0:
-
-            if not install_konfai():
-                return
 
             from konfai.utils.utils import (
                 AppRepositoryHFError,
@@ -881,7 +906,6 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                 except Exception as e:
                     slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
             self.ui.modelComboBox.currentIndexChanged.connect(self.on_model_selected)
-
         super().enter()
         self.on_model_selected()
 
@@ -1060,7 +1084,6 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.ui.checkpointsComboBox.clear()
         for checkpoint_name in model.get_checkpoints_name():
             self.ui.checkpointsComboBox.addItem(checkpoint_name)
-
         if int(self.get_parameter("number_of_tta")) > model.get_maximum_tta():
             self.set_parameter("number_of_tta", str(model.get_maximum_tta()))
         if int(self.get_parameter("number_of_mc_dropout")) > model.get_mc_dropout():
@@ -1872,14 +1895,11 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         # Set header title
         self.ui.headerTitleLabel.text = title
 
-        # Populate GPU/CPU device combo box
-        available_devices = self._get_available_devices()
-        for available_device in available_devices:
-            self.ui.deviceComboBox.addItem(available_device[0], available_device[1])
+        # Populate CPU device combo box
+        self.ui.deviceComboBox.addItem("cpu [slow]", None)
 
         self.ui.deviceComboBox.currentIndexChanged.connect(self.on_device_changed)
-        # Default to the last device entry (typically a GPU combo if available)
-        self.ui.deviceComboBox.setCurrentIndex(len(available_devices) - 1)
+
         # Observe scene close/open to keep parameter node in sync
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.StartCloseEvent, self.on_scene_start_close)
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.EndCloseEvent, self.on_scene_end_close)
@@ -1889,9 +1909,6 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         self.ui.openTempButton.setIconSize(QSize(18, 18))
         self.ui.openTempButton.clicked.connect(self.on_open_work_dir)
         self.ui.openTempButton.setEnabled(False)
-
-        # Initialize log display
-        self.update_logs("", True)
 
     def register_apps(self, apps: list[AppTemplateWidget]) -> None:
         """
@@ -1935,7 +1952,6 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         # Enter the first app by default
         app = next(iter(self._apps.values()))
         self._current_konfai_app = app
-        app.enter()
 
     def initialize_parameter_node(self):
         """
@@ -2050,11 +2066,16 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
 
         If usage exceeds 80%, the progress bar color is set to red.
         """
-        import psutil
+        try:
+            import psutil
 
-        ram = psutil.virtual_memory()
-        used_gb = (ram.total - ram.available) / (1024**3)
-        total_gb = ram.total / (1024**3)
+            ram = psutil.virtual_memory()
+            used_gb = (ram.total - ram.available) / (1024**3)
+            total_gb = ram.total / (1024**3)
+        except:
+            used_gb = 0
+            total_gb = 32
+
         self.ui.ramLabel.text = _("RAM used: {used:.1f} GB / {total:.1f} GB").format(used=used_gb, total=total_gb)
         self.ui.ramProgressBar.value = used_gb / total_gb * 100
 
@@ -2170,13 +2191,57 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         for app in self._apps.values():
             app.cleanup()
 
+    def install_torch(self) -> bool:
+        try:
+            import torch
+
+            return True
+        except ImportError:
+            msg = (
+                "SlicerKonfAI requires PyTorch to be installed in 3D Slicer using the official SlicerPyTorch extension.\n\n"
+                "Step 1 – Install the SlicerPyTorch extension:\n"
+                "  • In Slicer, open:  View → Extensions Manager\n"
+                "  • Search for:  PyTorch (or SlicerPyTorch)\n"
+                "  • Install the extension and restart Slicer when prompted.\n\n"
+                "Step 2 – Install PyTorch using the SlicerPyTorch module:\n"
+                "  • Open:  View → Modules\n"
+                "  • Select:  Utilities → PyTorch\n"
+                "  • Click 'Install PyTorch and choose the CPU or GPU build\n"
+                "    that matches your system configuration.\n\n"
+            )
+
+            slicer.util.infoDisplay(msg, windowTitle="Prerequisite: PyTorch installation required")
+            slicer.util.selectModule("Data")
+            return False
+
     def enter(self) -> None:
+        if not self.install_torch():
+            return
+
+        available_devices = self._get_available_devices()
+        self.ui.deviceComboBox.clear()
+        for available_device in available_devices:
+            self.ui.deviceComboBox.addItem(available_device[0], available_device[1])
+
+        self.ui.deviceComboBox.currentIndexChanged.connect(self.on_device_changed)
+        # Default to the last device entry (typically a GPU combo if available)
+        self.ui.deviceComboBox.setCurrentIndex(len(available_devices) - 1)
+
         if self._current_konfai_app:
             self._current_konfai_app.enter()
+        # Initialize log display
+        self.update_logs("", True)
 
     def exit(self) -> None:
         if self._current_konfai_app:
             self._current_konfai_app.exit()
+
+
+def _is_reload_setup(moduleName: str) -> bool:
+    key = f"{moduleName}.wasSetupOnce"
+    was = bool(slicer.app.property(key))  # False si jamais défini
+    slicer.app.setProperty(key, True)  # Marque pour les prochains setup()
+    return was  # True => c’est un reload (ou une 2e init)
 
 
 class KonfAIWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
@@ -2213,6 +2278,9 @@ class KonfAIWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
         # Attach the core widget to the Slicer module layout
         self.layout.addWidget(self.konfai_core)
+
+        if _is_reload_setup("SlicerKonfAI"):
+            self.konfai_core.enter()
 
     def cleanup(self) -> None:
         """
