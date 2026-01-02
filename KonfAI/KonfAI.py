@@ -2,9 +2,12 @@
 import itertools
 import json
 import os
+import random
 import re
 import shutil
+import urllib.request
 from abc import abstractmethod
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +29,7 @@ from qt import (
     QMenu,
     QMessageBox,
     QProcess,
+    QPushButton,
     QSettings,
     QSize,
     Qt,
@@ -43,25 +47,124 @@ from slicer.ScriptedLoadableModule import (
 )
 from slicer.util import VTKObservationMixin
 
-KONFAI_REQUIRED_VERSION = "1.4.3"
 
-
-def install_konfai():
+def get_latest_pypi_version(package: str, timeout_s: float = 5.0) -> str | None:
+    """
+    Return the latest *released* version on PyPI for `package`, or None if unreachable.
+    """
+    url = f"https://pypi.org/pypi/{package}/json"
     try:
-        from importlib.metadata import PackageNotFoundError, version
-    except ImportError:
-        from importlib_metadata import PackageNotFoundError, version  # type: ignore[no-redef]
+        with urllib.request.urlopen(url, timeout=timeout_s) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data["info"]["version"]
+    except Exception as exc:
+        print(f"[KonfAI] Could not query PyPI for {package}: {exc}")
+        return None
+
+
+def get_installed_version(package: str) -> str | None:
+    try:
+        from importlib.metadata import version
+
+        return version(package)
+    except Exception:
+        return None
+
+
+def ask_user_to_install_dependency(package_label: str, details: str) -> bool:
+    """
+    Ask the user for permission to install a dependency.
+    Returns True if user accepts, False otherwise.
+    """
+    mb = QMessageBox(slicer.util.mainWindow())
+    mb.setIcon(QMessageBox.Question)
+    mb.setWindowTitle("Additional dependency required")
+    mb.setText(f"This module requires {package_label}.")
+    mb.setInformativeText(
+        details + "\n\nDo you want to install it now?" + "\n\nIf you choose 'No', the module will close."
+    )
+    mb.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+    mb.setDefaultButton(QMessageBox.Yes)
+    return mb.exec_() == QMessageBox.Yes
+
+
+@contextmanager
+def slicer_wait_popup(title: str, text: str):
+    """
+    Show a modal 'please wait' dialog during long blocking operations.
+
+    This prevents users from force-quitting Slicer because the UI looks frozen.
+    """
+    box = QMessageBox(slicer.util.mainWindow())
+    box.setWindowTitle(title)
+    box.setText(text)
+    box.setIcon(QMessageBox.Information)
+    box.setStandardButtons(QMessageBox.NoButton)  # no buttons = pure wait popup
+    box.setModal(True)
+    box.show()
+
+    # Let Qt process paint events so the dialog is actually displayed
+    slicer.app.processEvents()
 
     try:
-        current_version = version("konfai")
-        if current_version != KONFAI_REQUIRED_VERSION:
-            raise ImportError("Wrong version")
-    except PackageNotFoundError:
-        print("konfai not installed in Slicer.")
-        slicer.util.pip_install(f"{"konfai"}=={KONFAI_REQUIRED_VERSION}")
-    except ImportError as e:
-        print(e)
-        slicer.util.pip_install(f"{"konfai"}=={KONFAI_REQUIRED_VERSION}")
+        yield
+    finally:
+        box.hide()
+        box.deleteLater()
+        slicer.app.processEvents()
+
+
+def install_konfai() -> bool:
+    package = "konfai"
+
+    installed = get_installed_version(package)
+    latest = get_latest_pypi_version(package)
+
+    if latest is None:
+        if installed is not None:
+            print(f"{package} installed ({installed}), PyPI unreachable -> keeping current.")
+            return True
+        if not ask_user_to_install_dependency(
+            "KonfAI",
+            "KonfAI is not installed.\n"
+            "PyPI cannot be reached right now, but we can still try installing.\n"
+            "Do you want to try?",
+        ):
+            slicer.util.selectModule("Data")
+            return False
+        with slicer_wait_popup("KonfAI dependency install", "Installing KonfAI..."):
+            slicer.util.pip_install("konfai")
+        return True
+
+    if installed is None:
+        if not ask_user_to_install_dependency(
+            "KonfAI",
+            f"KonfAI is required.\nLatest available version on PyPI: {latest}\n\n" "Do you want to install it now?",
+        ):
+            slicer.util.selectModule("Data")
+            return False
+        with slicer_wait_popup("KonfAI dependency install", f"Installing KonfAI {latest}..."):
+            slicer.util.pip_install(f"konfai=={latest}")
+        return True
+
+    if installed != latest:
+        if not ask_user_to_install_dependency(
+            "KonfAI",
+            f"A newer KonfAI version is available.\n"
+            f"Installed: {installed}\n"
+            f"Latest:    {latest}\n\n"
+            "Do you want to upgrade now?",
+        ):
+            return True
+
+        with slicer_wait_popup(
+            "KonfAI dependency upgrade",
+            f"Upgrading KonfAI from {installed} to {latest}...\n"
+            "This may take several minutes.\n\n"
+            "Do not close Slicer during installation.",
+        ):
+            slicer.util.pip_install(f"konfai=={latest}")
+    return True
 
 
 class KonfAI(ScriptedLoadableModule):
@@ -294,9 +397,14 @@ class Process(QProcess):
             else:
                 pct = None
 
-            if speed and pct is not None:
+            if speed is not None and pct is not None:
                 # Notify UI of updated progress and speed
                 self._update_progress(pct, speed.group(1) + " " + speed.group(2))
+            else:
+                m = re.search(r"\b(\d{1,3})%\|", line)
+                if m:
+                    pct = int(m.group(1))
+                    self._update_progress(pct, "")
 
     def on_stderr_ready(self) -> None:
         """
@@ -304,6 +412,7 @@ class Process(QProcess):
 
         Currently we simply print the content to the Python console for debugging.
         """
+
         print("Error : ", self.readAllStandardError().data().decode().strip())
 
     def run(self, command: str, work_dir: Path, args: list[str], on_end_function) -> None:
@@ -569,8 +678,12 @@ class AppTemplateWidget(QWidget):
 
         Ensures the parameter node is initialized and the GUI reflects its current state.
         """
+        self.initialize_parameter_node()
         self.initialize_gui_from_parameter_node()
         self.update_gui_from_parameter_node()
+
+    def exit(self) -> None:
+        pass
 
 
 class KonfAIAppTemplateWidget(AppTemplateWidget):
@@ -595,40 +708,13 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         self._description_expanded = False
 
-        settings = QSettings()
-        raw = settings.value(f"KonfAI-Settings/{name}/Models")
-        models_name = []
-        if raw is not None:
-            models_name = json.loads(raw)
-
-        install_konfai()
-        from konfai.utils.utils import AppRepositoryHFError, ModelDirectory, ModelHF, get_available_models_on_hf_repo
-
-        default_models_name = []
-        for konfai_repo in konfai_repo_list:
-            try:
-                default_models_name += [
-                    konfai_repo + ":" + model_name for model_name in get_available_models_on_hf_repo(konfai_repo)
-                ]
-            except AppRepositoryHFError as e:
-                slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
-        models_name = list(set(default_models_name + models_name))
-        # Populate the model combo box with models found in the provided Hugging Face repos
-        for model_name in models_name:
-            try:
-                if len(model_name.split(":")) == 2:
-                    model = ModelHF(model_name.split(":")[0], model_name.split(":")[1])
-                else:
-                    model = ModelDirectory(Path(model_name).parent, Path(model_name).name)
-                self.ui.modelComboBox.addItem(model.get_display_name(), model)
-            except Exception as e:
-                slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
-
-        self.ui.modelComboBox.setCurrentIndex(0)
-
         # Connect volume selectors to parameter node synchronization
         self.ui.inputVolumeSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.update_parameter_node_from_gui)
         self.ui.outputVolumeSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.update_parameter_node_from_gui)
+        self.ui.outputVolumeSelector.connect(
+            "currentNodeChanged(vtkMRMLNode*)", self.ui.segmentationShow3DButton.setSegmentationNode
+        )
+        self.ui.segmentationShow3DButton.setVisible(False)
 
         # Evaluation / uncertainty input selectors
         self.ui.inputVolumeEvaluationSelector.connect(
@@ -650,7 +736,6 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.ui.mcDropoutSpinBox.valueChanged.connect(self.on_mc_dropout_changed)
 
         # Model selection and management
-        self.ui.modelComboBox.currentIndexChanged.connect(self.on_model_selected)
         self.ui.addModelButton.clicked.connect(self.on_add_model)
         self.ui.removeModelButton.clicked.connect(self.on_remove_model)
 
@@ -668,8 +753,20 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.ui.toggleDescriptionButton.clicked.connect(self.on_toggle_description)
         self.ui.qaTabWidget.currentChanged.connect(self.on_tab_changed)
 
+        self.ui.checkpointsComboBox.connect("activated(int)", self.on_checkpoint_activated)
+
     def on_ensemble_changed(self):
-        self.set_parameter("number_of_ensemble", str(self.ui.ensembleSpinBox.value))
+        model = self.ui.modelComboBox.currentData
+        if model is None:
+            return
+        checkpoints_name = self.get_selected_checkpoints()
+        if self.ui.ensembleSpinBox.value == len(checkpoints_name):
+            return
+        if self.ui.ensembleSpinBox.value > len(checkpoints_name):
+            self.add_chip(sorted(list(set(model.get_checkpoints_name()) - set(checkpoints_name)))[0])
+        else:
+            text = checkpoints_name[-1]
+            self.remove_chip(text)
 
     def on_tta_changed(self):
         self.set_parameter("number_of_tta", str(self.ui.ttaSpinBox.value))
@@ -744,6 +841,47 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         Re-initializes parameter node, GUI state and ensures model selection
         is consistent when the widget is shown.
         """
+        if self.ui.modelComboBox.count == 0:
+
+            if not install_konfai():
+                return
+
+            from konfai.utils.utils import (
+                AppRepositoryHFError,
+                ModelDirectory,
+                ModelHF,
+                get_available_models_on_hf_repo,
+            )
+
+            settings = QSettings()
+            raw = settings.value(f"KonfAI-Settings/{self._name}/Models")
+            models_name = []
+            if raw is not None:
+                models_name = json.loads(raw)
+
+            default_models_name = []
+
+            for konfai_repo in self._konfai_repo_list:
+                try:
+                    default_models_name += [
+                        konfai_repo + ":" + model_name for model_name in get_available_models_on_hf_repo(konfai_repo)
+                    ]
+                except AppRepositoryHFError as e:
+                    slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
+            models_name = list(set(default_models_name + models_name))
+
+            # Populate the model combo box with models found in the provided Hugging Face repos
+            for model_name in sorted(models_name):
+                try:
+                    if len(model_name.split(":")) == 2:
+                        model = ModelHF(model_name.split(":")[0], model_name.split(":")[1])
+                    else:
+                        model = ModelDirectory(Path(model_name).parent, Path(model_name).name)
+                    self.ui.modelComboBox.addItem(model.get_display_name(), model)
+                except Exception as e:
+                    slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
+            self.ui.modelComboBox.currentIndexChanged.connect(self.on_model_selected)
+
         super().enter()
         self.on_model_selected()
 
@@ -775,12 +913,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                 break
         if current_model is None:
             current_model = self.ui.modelComboBox.itemData(0)
-
         # Ensemble / TTA / MC-dropout defaults based on model capabilities
-        if not self.get_parameter("number_of_ensemble"):
-            self.set_parameter(
-                "number_of_ensemble", str(current_model.get_number_of_models()) if current_model else "1"
-            )
         if not self.get_parameter("number_of_tta"):
             self.set_parameter("number_of_tta", str(current_model.get_maximum_tta()) if current_model else "0")
         if not self.get_parameter("number_of_mc_dropout"):
@@ -804,7 +937,6 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.ui.modelComboBox.setCurrentIndex(index if index != -1 else 0)
 
         # Ensemble / TTA / MC-dropout spin boxes
-        self.ui.ensembleSpinBox.setValue(int(self.get_parameter("number_of_ensemble")))
         self.ui.ttaSpinBox.setValue(int(self.get_parameter("number_of_tta")))
         self.ui.mcDropoutSpinBox.setValue(int(self.get_parameter("number_of_mc_dropout")))
 
@@ -925,8 +1057,9 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.on_toggle_description()
 
         # Update ensemble / TTA / MC-dropout limits
-        if int(self.get_parameter("number_of_ensemble")) > model.get_number_of_models():
-            self.set_parameter("number_of_mc_dropout", str(model.get_number_of_models()))
+        self.ui.checkpointsComboBox.clear()
+        for checkpoint_name in model.get_checkpoints_name():
+            self.ui.checkpointsComboBox.addItem(checkpoint_name)
 
         if int(self.get_parameter("number_of_tta")) > model.get_maximum_tta():
             self.set_parameter("number_of_tta", str(model.get_maximum_tta()))
@@ -952,6 +1085,110 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.ui.qaTabWidget.setTabEnabled(1, has_uncertainty)
 
         self.set_parameter("Model", model.get_name())
+        self.update_checkpoints_chips()
+
+    def on_checkpoint_activated(self, index: int):
+        """
+        Called when the user selects a different checkpoints in the combo box.
+        """
+        text = self.ui.checkpointsComboBox.itemText(index)
+        self.add_chip(text)
+
+    def remove_chip(self, text: str):
+        if len(self.get_selected_checkpoints()) == 1:
+            return
+        layout = self.ui.selectedCheckpointsWidget.layout()
+
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            if item is None:
+                continue
+            w = item.widget()
+            if isinstance(w, QPushButton):
+                if w.text == text:
+                    layout.removeWidget(w)
+                    w.deleteLater()
+        self.ui.checkpointsComboBox.addItem(text)
+        self.ui.ensembleSpinBox.setValue(len(self.get_selected_checkpoints()))
+
+    def add_chip(self, text: str):
+        """
+        Create and insert a new chip button for the given checkpoint name.
+        """
+        layout = self.ui.selectedCheckpointsWidget.layout()
+        if text in self.get_selected_checkpoints():
+            return
+
+        btn = QPushButton(text)
+        btn.flat = True
+        btn.toolTip = f"Click to remove checkpoint '{text}'"
+        btn.minimumHeight = 20
+        btn.maximumHeight = 24
+
+        btn.styleSheet = """
+            QPushButton {
+                color: #0b3d91;
+                background-color: #edf3ff;
+                border: 1px solid #0b3d91;
+                border-radius: 12px;
+                padding: 3px 10px;
+                font-weight: 600;
+            }
+
+            QPushButton:hover {
+                background-color: #dce8ff;
+            }
+            """
+
+        def remove_chip():
+            self.remove_chip(btn.text)
+
+        btn.clicked.connect(remove_chip)
+
+        insert_index = layout.count()
+        for i in range(layout.count()):
+            if layout.itemAt(i).spacerItem() is not None:
+                insert_index = i
+                break
+        layout.insertWidget(insert_index, btn)
+
+        self.ui.ensembleSpinBox.setValue(len(self.get_selected_checkpoints()))
+        index = self.ui.checkpointsComboBox.findText(text)
+        if index != -1:
+            self.ui.checkpointsComboBox.removeItem(index)
+
+    def update_checkpoints_chips(self):
+        """
+        Setup the list of selected presets as removable 'chips' in the UI.
+
+        This gives a quick visual overview of which presets will be run
+        in sequence, and allows users to remove them with a single click.
+        """
+        layout = self.ui.selectedCheckpointsWidget.layout()
+        for i in reversed(range(layout.count())):
+            item = layout.itemAt(i)
+            widget = item.widget()
+
+            if isinstance(widget, QPushButton):
+                layout.removeWidget(widget)
+                widget.deleteLater()
+
+        checkpoints_name = self.ui.modelComboBox.currentData.get_checkpoints_name()
+        for checkpoint_name in checkpoints_name:
+            self.add_chip(checkpoint_name)
+
+    def get_selected_checkpoints(self) -> list[str]:
+        """
+        Retrieve the list of checkpoint names currently represented as chips.
+        """
+        layout = self.ui.selectedCheckpointsWidget.layout()
+        checkpoints_name = []
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            w = item.widget()
+            if isinstance(w, QPushButton):
+                checkpoints_name.append(w.text)
+        return checkpoints_name
 
     def on_toggle_description(self) -> None:
         """
@@ -1019,7 +1256,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         if model is None:
             return
 
-        _, inference_file_path, _ = model.download_inference(0)
+        _, inference_file_path, _ = model.download_inference(0, [], "Prediction.yml")
         QDesktopServices.openUrl(QUrl.fromLocalFile(Path(inference_file_path).parent))
 
     def on_add_model(self) -> None:
@@ -1191,13 +1428,19 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             )
             return
 
+        # Ask number of epochs
+        epochs = QInputDialog.getInt(None, "Fine tune", "Number of epochs:", 10, 1, 10000, 1)
+
+        it_validation = QInputDialog.getInt(
+            None, "Fine tune", "Validation interval (every N epochs):", 1000, 1, 100000, 1
+        )
         # Make a filesystem-safe name (slug)
         safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", name.strip())
         if not safe:
             QMessageBox.warning(None, "Invalid name", "Please enter a valid name.")
             return
 
-        model.install_fine_tune(Path(parent_dir) / name, display_name)
+        model.install_fine_tune("Config.yml", Path(parent_dir) / name, display_name, epochs, it_validation)
         # Add the folder to the model combo box
         model_ft = ModelDirectory(Path(parent_dir), name)
         self.ui.modelComboBox.addItem(model_ft.get_display_name(), model_ft)
@@ -1435,7 +1678,6 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.uncertainty_panel.clear_images_list()
         self.evaluation_panel.clear_metrics()
         self.uncertainty_panel.clear_metrics()
-
         model = self.ui.modelComboBox.currentData
         args = [
             "infer",
@@ -1444,8 +1686,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             "Volume.mha",
             "-o",
             "Output",
-            "--ensemble",
-            str(self.ui.ensembleSpinBox.value),
+            "--ensemble_models",
+            *self.get_selected_checkpoints(),
             "--tta",
             str(self.ui.ttaSpinBox.value),
             "--mc",
@@ -1504,29 +1746,41 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
             # Decide if output should be a label map (uint8) or scalar volume
             want_label = data.dtype == np.uint8
-            expected_class = "vtkMRMLLabelMapVolumeNode" if want_label else "vtkMRMLScalarVolumeNode"
-            base_name = "OutputLabel" if want_label else "OutputVolume"
+            expected_class = "vtkMRMLSegmentationNode" if want_label else "vtkMRMLScalarVolumeNode"
+            base_name = "OutputSegmentation" if want_label else "OutputVolume"
 
-            current = self.ui.outputVolumeSelector.currentNode()
+            node = slicer.mrmlScene.AddNewNodeByClass(expected_class, base_name)
+            self.ui.outputVolumeSelector.setCurrentNode(node)
+            self.ui.segmentationShow3DButton.setVisible(node.IsA("vtkMRMLSegmentationNode"))
+            if node.IsA("vtkMRMLSegmentationNode"):
+                tmp_labelmap = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLabelMapVolumeNode", "TempLabelmap")
+                slicer.util.updateVolumeFromArray(tmp_labelmap, data[0])
+                tmp_labelmap.CopyOrientation(self.ui.inputVolumeSelector.currentNode())
+                node.CreateDefaultDisplayNodes()
 
-            # Ensure that the current node has the correct MRML class
-            if current is None:
-                node = slicer.mrmlScene.AddNewNodeByClass(expected_class, base_name)
-                self.ui.outputVolumeSelector.setCurrentNode(node)
-            elif not current.IsA(expected_class):
-                old = current
-                slicer.mrmlScene.RemoveNode(old)
+                slicer.modules.segmentations.logic().ImportLabelmapToSegmentationNode(tmp_labelmap, node)
+                label_value_to_segment_name = model.get_terminology()
+                segmentation = node.GetSegmentation()
+                for label_value, segment_id in zip(np.unique(data[0])[1:], range(segmentation.GetNumberOfSegments())):
+                    segment = segmentation.GetNthSegment(segment_id)
+                    label_value = int(label_value)
 
-                node = slicer.mrmlScene.AddNewNodeByClass(expected_class, base_name)
-                self.ui.outputVolumeSelector.setCurrentNode(node)
+                    random.seed(label_value)
+                    segment.SetColor(random.random(), random.random(), random.random())
+
+                    # Si la valeur existe dans ton mapping
+                    if label_value in label_value_to_segment_name:
+                        segment_name = label_value_to_segment_name[label_value]
+                        segment.SetName(segment_name)
+
+                slicer.mrmlScene.RemoveNode(tmp_labelmap)
+
             else:
-                node = current
+                # Populate the node with the first channel of the prediction data
+                slicer.util.updateVolumeFromArray(node, data[0])
 
-            # Populate the node with the first channel of the prediction data
-            slicer.util.updateVolumeFromArray(node, data[0])
-
-            # Copy orientation from the input volume so they are aligned
-            node.CopyOrientation(self.ui.inputVolumeSelector.currentNode())
+                # Copy orientation from the input volume so they are aligned
+                node.CopyOrientation(self.ui.inputVolumeSelector.currentNode())
 
             # Copy KonfAI metadata to MRML node attributes
             for key, value in attr.items():
@@ -1614,7 +1868,6 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         self.setLayout(QVBoxLayout())
         self.layout().addWidget(ui_widget)
         self.ui = slicer.util.childWidgetVariables(ui_widget)
-
         self.initialize_parameter_node()
         # Set header title
         self.ui.headerTitleLabel.text = title
@@ -1678,7 +1931,6 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         for app in apps:
             self._apps[app._name] = app
             app.app_setup(self.update_logs, self.update_progress, self._parameter_node)
-            app.initialize_parameter_node()
 
         # Enter the first app by default
         app = next(iter(self._apps.values()))
@@ -1918,6 +2170,14 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         for app in self._apps.values():
             app.cleanup()
 
+    def enter(self) -> None:
+        if self._current_konfai_app:
+            self._current_konfai_app.enter()
+
+    def exit(self) -> None:
+        if self._current_konfai_app:
+            self._current_konfai_app.exit()
+
 
 class KonfAIWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
     """
@@ -1968,7 +2228,7 @@ class KonfAIWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         This hook can be used to ensure state is up-to-date when the user
         returns to the module. Currently no additional logic is required.
         """
-        pass
+        self.konfai_core.enter()
 
     def exit(self) -> None:  # noqa: A003
         """
@@ -1977,4 +2237,4 @@ class KonfAIWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         This hook can be used to pause or finalize ongoing tasks, but
         no special handling is required at the moment.
         """
-        pass
+        self.konfai_core.exit()
