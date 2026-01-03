@@ -180,8 +180,7 @@ def install_konfai() -> bool:
 
                 slicer.util.pip_install(f"--upgrade --force-reinstall --no-deps konfai=={latest}")
                 slicer.util.pip_install(
-                    "tqdm numpy ruamel.yaml psutil tensorboard "
-                    "SimpleITK lxml h5py nvidia-ml-py requests huggingface_hub"
+                    "tqdm numpy ruamel.yaml psutil tensorboard " "lxml h5py nvidia-ml-py requests huggingface_hub"
                 )
             try:
                 konfai.assert_konfai_install()
@@ -596,15 +595,15 @@ class AppTemplateWidget(QWidget):
         else:
             return None
 
-    def get_device(self) -> str | None:
+    def get_device(self) -> list[str]:
         """
         Convenience accessor to retrieve the associated 'Device' parameter.
         Returns the device string if set and not 'None', otherwise None.
         """
         if self._parameter_node is not None and self._parameter_node.GetParameter("Device") != "None":
-            return self._parameter_node.GetParameter("Device")
+            return self._parameter_node.GetParameter("Device").split(",")
         else:
-            return None
+            return []
 
     def set_running(self, state: bool) -> None:
         """
@@ -1590,7 +1589,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         # Select device backend from parameter node (GPU indices or CPU fallback)
         if self.get_device():
-            args += ["--gpu", self.get_device()]
+            args += ["--gpu"] + self.get_device()
         else:
             args += ["--cpu", "1"]
 
@@ -1645,7 +1644,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         # Device selection (GPU or CPU)
         if self.get_device():
-            args += ["--gpu", self.get_device()]
+            args += ["--gpu"] + self.get_device()
         else:
             args += ["--cpu", "1"]
 
@@ -1719,8 +1718,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         # Device selection (GPU or CPU)
         if self.get_device():
-
-            args += ["--gpu", self.get_device()]
+            args += ["--gpu"] + self.get_device()
         else:
             args += ["--cpu", "1"]
         input_node = self.ui.inputVolumeSelector.currentNode()
@@ -2035,7 +2033,7 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
                 index = str(device[0])
                 for i in device[1:]:
                     device_name += f",{get_device_name(i)}"
-                    index += f"-{i}"
+                    index += f",{i}"
                 available_devices.append((f"gpu {index} - {device_name}", index))
         return available_devices
 
@@ -2223,7 +2221,6 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         for available_device in available_devices:
             self.ui.deviceComboBox.addItem(available_device[0], available_device[1])
 
-        self.ui.deviceComboBox.currentIndexChanged.connect(self.on_device_changed)
         # Default to the last device entry (typically a GPU combo if available)
         self.ui.deviceComboBox.setCurrentIndex(len(available_devices) - 1)
 
