@@ -7,6 +7,7 @@ import re
 import shutil
 import urllib.request
 from abc import abstractmethod
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -711,6 +712,159 @@ class AppTemplateWidget(QWidget):
         pass
 
 
+class ChipSelector:
+    """
+    Generic "ComboBox -> removable chips" controller.
+
+    Responsibilities:
+      - Add a chip when user selects an item from combo
+      - Remove chip on click, and put the item back in combo
+      - Keep an optional spinbox in sync with number of selected chips
+      - Notify optional callback on change
+
+    Assumptions:
+      - `container_layout` is a QLayout that may end with a spacer item
+      - combo exposes itemText(i), addItem(text), removeItem(i), findText(text),
+        and emits activated(int) (Qt signal)
+    """
+
+    def __init__(
+        self,
+        combo,
+        container_layout,
+        spinbox=None,
+        min_selected: int = 0,
+        on_change: Callable[[list[str]], None] | None = None,
+    ) -> None:
+        self._combo = combo
+        self._layout = container_layout
+        self._spinbox = spinbox
+        self._min_selected = max(0, int(min_selected))
+        self._on_change = on_change
+        self._combo.connect("activated(int)", self._on_combo_activated)
+        if self._spinbox is not None:
+            self._spinbox.setMinimum(self._min_selected)
+            self._spinbox.valueChanged.connect(self._on_spinbox_changed)
+        self._availables: list[str] = []
+
+    def _on_spinbox_changed(self):
+        sel = self.selected()
+        if self._spinbox.value == len(sel):
+            return
+        if self._spinbox.value > len(sel):
+            self.add(sorted(list(set(self._availables) - set(sel)))[0])
+        else:
+            text = sel[-1]
+            self.remove(text)
+
+    def update(self, availables: list[str]):
+        self._availables = availables
+        self._combo.clear()
+        if self._spinbox is not None:
+            self._spinbox.setMaximum(len(availables))
+        for i in reversed(range(self._layout.count())):
+            item = self._layout.itemAt(i)
+            widget = item.widget()
+
+            if isinstance(widget, QPushButton):
+                self._layout.removeWidget(widget)
+                widget.deleteLater()
+
+        for name in availables:
+            self.add(name)
+
+    def selected(self) -> list[str]:
+        """Return currently selected chip texts (in layout order)."""
+        out: list[str] = []
+        for i in range(self._layout.count()):
+            w = self._layout.itemAt(i).widget()
+            if isinstance(w, QPushButton):
+                out.append(w.text)
+        return out
+
+    def add(self, text: str) -> None:
+        """Add a chip (if not already selected) and remove it from combo."""
+        if not text or text in self.selected():
+            return
+
+        btn = QPushButton(text)
+        btn.flat = True
+        btn.toolTip = f"Click to remove {text}"
+        btn.minimumHeight = 20
+        btn.maximumHeight = 24
+
+        btn.styleSheet = """
+            QPushButton {
+                color: #0b3d91;
+                background-color: #edf3ff;
+                border: 1px solid #0b3d91;
+                border-radius: 12px;
+                padding: 3px 10px;
+                font-weight: 600;
+            }
+
+            QPushButton:hover {
+                background-color: #dce8ff;
+            }
+            """
+
+        def _remove():
+            self.remove(text)
+
+        btn.clicked.connect(_remove)
+        self._layout.insertWidget(self._insert_index_before_spacer(), btn)
+
+        idx = self._combo.findText(text)
+        if idx != -1:
+            self._combo.removeItem(idx)
+        self._sync()
+
+    def remove(self, text: str) -> None:
+        """Remove a chip (respecting min_selected) and add it back to combo."""
+        if not text:
+            return
+
+        cur = self.selected()
+        if len(cur) <= self._min_selected:
+            return
+
+        # remove chip widget
+        for i in range(self._layout.count()):
+            w = self._layout.itemAt(i).widget()
+            if isinstance(w, QPushButton) and w.text == text:
+                self._layout.removeWidget(w)
+                w.deleteLater()
+                break
+
+        # add back to combo (avoid duplicates)
+        if self._combo.findText(text) == -1:
+            self._combo.addItem(text)
+
+        self._sync()
+
+    def _sync(self) -> None:
+        sel = self.selected()
+        if self._spinbox is not None:
+            try:
+                self._spinbox.setValue(len(sel))
+            except Exception:
+                pass
+        if self._on_change is not None:
+            self._on_change(sel)
+
+    def _on_combo_activated(self, index: int) -> None:
+        text = self._combo.itemText(index)
+        self.add(text)
+
+    def _insert_index_before_spacer(self) -> int:
+        insert_index = self._layout.count()
+        for i in range(self._layout.count()):
+            if self._layout.itemAt(i).spacerItem() is not None:
+                insert_index = i
+                break
+        return insert_index
+
+
 class KonfAIAppTemplateWidget(AppTemplateWidget):
     """
     Concrete implementation of AppTemplateWidget for KonfAI applications.
@@ -756,7 +910,6 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.ui.referenceMaskSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.update_parameter_node_from_gui)
         self.ui.inputTransformSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.update_parameter_node_from_gui)
 
-        self.ui.ensembleSpinBox.valueChanged.connect(self.on_ensemble_changed)
         self.ui.ttaSpinBox.valueChanged.connect(self.on_tta_changed)
         self.ui.mcDropoutSpinBox.valueChanged.connect(self.on_mc_dropout_changed)
 
@@ -778,20 +931,9 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.ui.toggleDescriptionButton.clicked.connect(self.on_toggle_description)
         self.ui.qaTabWidget.currentChanged.connect(self.on_tab_changed)
 
-        self.ui.checkpointsComboBox.connect("activated(int)", self.on_checkpoint_activated)
-
-    def on_ensemble_changed(self):
-        model = self.ui.modelComboBox.currentData
-        if model is None:
-            return
-        checkpoints_name = self.get_selected_checkpoints()
-        if self.ui.ensembleSpinBox.value == len(checkpoints_name):
-            return
-        if self.ui.ensembleSpinBox.value > len(checkpoints_name):
-            self.add_chip(sorted(list(set(model.get_checkpoints_name()) - set(checkpoints_name)))[0])
-        else:
-            text = checkpoints_name[-1]
-            self.remove_chip(text)
+        self.chip_selector = ChipSelector(
+            self.ui.checkpointsComboBox, self.ui.selectedCheckpointsWidget.layout(), self.ui.ensembleSpinBox, 1
+        )
 
     def on_tta_changed(self):
         self.set_parameter("number_of_tta", str(self.ui.ttaSpinBox.value))
@@ -1080,15 +1222,12 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.on_toggle_description()
 
         # Update ensemble / TTA / MC-dropout limits
-        self.ui.checkpointsComboBox.clear()
-        for checkpoint_name in model.get_checkpoints_name():
-            self.ui.checkpointsComboBox.addItem(checkpoint_name)
+
+        self.chip_selector.update(model.get_checkpoints_name())
         if int(self.get_parameter("number_of_tta")) > model.get_maximum_tta():
             self.set_parameter("number_of_tta", str(model.get_maximum_tta()))
         if int(self.get_parameter("number_of_mc_dropout")) > model.get_mc_dropout():
             self.set_parameter("number_of_mc_dropout", str(model.get_mc_dropout()))
-
-        self.ui.ensembleSpinBox.setMaximum(model.get_number_of_models())
 
         self.ui.ttaSpinBox.setEnabled(model.get_maximum_tta() > 0)
         self.ui.ttaSpinBox.setMaximum(model.get_maximum_tta())
@@ -1107,110 +1246,6 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.ui.qaTabWidget.setTabEnabled(1, has_uncertainty)
 
         self.set_parameter("Model", model.get_name())
-        self.update_checkpoints_chips()
-
-    def on_checkpoint_activated(self, index: int):
-        """
-        Called when the user selects a different checkpoints in the combo box.
-        """
-        text = self.ui.checkpointsComboBox.itemText(index)
-        self.add_chip(text)
-
-    def remove_chip(self, text: str):
-        if len(self.get_selected_checkpoints()) == 1:
-            return
-        layout = self.ui.selectedCheckpointsWidget.layout()
-
-        for i in range(layout.count()):
-            item = layout.itemAt(i)
-            if item is None:
-                continue
-            w = item.widget()
-            if isinstance(w, QPushButton):
-                if w.text == text:
-                    layout.removeWidget(w)
-                    w.deleteLater()
-        self.ui.checkpointsComboBox.addItem(text)
-        self.ui.ensembleSpinBox.setValue(len(self.get_selected_checkpoints()))
-
-    def add_chip(self, text: str):
-        """
-        Create and insert a new chip button for the given checkpoint name.
-        """
-        layout = self.ui.selectedCheckpointsWidget.layout()
-        if text in self.get_selected_checkpoints():
-            return
-
-        btn = QPushButton(text)
-        btn.flat = True
-        btn.toolTip = f"Click to remove checkpoint '{text}'"
-        btn.minimumHeight = 20
-        btn.maximumHeight = 24
-
-        btn.styleSheet = """
-            QPushButton {
-                color: #0b3d91;
-                background-color: #edf3ff;
-                border: 1px solid #0b3d91;
-                border-radius: 12px;
-                padding: 3px 10px;
-                font-weight: 600;
-            }
-
-            QPushButton:hover {
-                background-color: #dce8ff;
-            }
-            """
-
-        def remove_chip():
-            self.remove_chip(btn.text)
-
-        btn.clicked.connect(remove_chip)
-
-        insert_index = layout.count()
-        for i in range(layout.count()):
-            if layout.itemAt(i).spacerItem() is not None:
-                insert_index = i
-                break
-        layout.insertWidget(insert_index, btn)
-
-        self.ui.ensembleSpinBox.setValue(len(self.get_selected_checkpoints()))
-        index = self.ui.checkpointsComboBox.findText(text)
-        if index != -1:
-            self.ui.checkpointsComboBox.removeItem(index)
-
-    def update_checkpoints_chips(self):
-        """
-        Setup the list of selected presets as removable 'chips' in the UI.
-
-        This gives a quick visual overview of which presets will be run
-        in sequence, and allows users to remove them with a single click.
-        """
-        layout = self.ui.selectedCheckpointsWidget.layout()
-        for i in reversed(range(layout.count())):
-            item = layout.itemAt(i)
-            widget = item.widget()
-
-            if isinstance(widget, QPushButton):
-                layout.removeWidget(widget)
-                widget.deleteLater()
-
-        checkpoints_name = self.ui.modelComboBox.currentData.get_checkpoints_name()
-        for checkpoint_name in checkpoints_name:
-            self.add_chip(checkpoint_name)
-
-    def get_selected_checkpoints(self) -> list[str]:
-        """
-        Retrieve the list of checkpoint names currently represented as chips.
-        """
-        layout = self.ui.selectedCheckpointsWidget.layout()
-        checkpoints_name = []
-        for i in range(layout.count()):
-            item = layout.itemAt(i)
-            w = item.widget()
-            if isinstance(w, QPushButton):
-                checkpoints_name.append(w.text)
-        return checkpoints_name
 
     def on_toggle_description(self) -> None:
         """
@@ -1709,7 +1744,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             "-o",
             "Output",
             "--ensemble_models",
-            *self.get_selected_checkpoints(),
+            *self.chip_selector.selected(),
             "--tta",
             str(self.ui.ttaSpinBox.value),
             "--mc",
@@ -1892,10 +1927,6 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         self.initialize_parameter_node()
         # Set header title
         self.ui.headerTitleLabel.text = title
-
-        # Populate CPU device combo box
-        self.ui.deviceComboBox.addItem("cpu [slow]", None)
-
         self.ui.deviceComboBox.currentIndexChanged.connect(self.on_device_changed)
 
         # Observe scene close/open to keep parameter node in sync
@@ -2215,19 +2246,28 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
     def enter(self) -> None:
         if not self.install_torch():
             return
+        if self.ui.deviceComboBox.count == 0:
+            available_devices = self._get_available_devices()
+            for available_device in available_devices:
+                self.ui.deviceComboBox.addItem(available_device[0], available_device[1])
 
-        available_devices = self._get_available_devices()
-        self.ui.deviceComboBox.clear()
-        for available_device in available_devices:
-            self.ui.deviceComboBox.addItem(available_device[0], available_device[1])
+            # Default to the last device entry (typically a GPU combo if available)
+            self.ui.deviceComboBox.setCurrentIndex(len(available_devices) - 1)
 
-        # Default to the last device entry (typically a GPU combo if available)
-        self.ui.deviceComboBox.setCurrentIndex(len(available_devices) - 1)
+        index = -1
+        if self._parameter_node:
+            devices = self._parameter_node.GetParameter("Device")
+            index = self.ui.deviceComboBox.findData(devices if devices != "None" else None)
+
+        if index != -1:
+            self.ui.deviceComboBox.setCurrentIndex(index)
+        else:
+            self.ui.deviceComboBox.setCurrentIndex(self.ui.deviceComboBox.count - 1)
 
         if self._current_konfai_app:
             self._current_konfai_app.enter()
         # Initialize log display
-        self.update_logs("", True)
+        self._update_ram()
 
     def exit(self) -> None:
         if self._current_konfai_app:
