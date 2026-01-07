@@ -734,6 +734,7 @@ class ChipSelector:
         container_layout,
         spinbox=None,
         min_selected: int = 0,
+        combo_remove: bool = False,
         on_change: Callable[[list[str]], None] | None = None,
     ) -> None:
         self._combo = combo
@@ -741,6 +742,7 @@ class ChipSelector:
         self._spinbox = spinbox
         self._min_selected = max(0, int(min_selected))
         self._on_change = on_change
+        self._combo_remove = combo_remove
         self._combo.connect("activated(int)", self._on_combo_activated)
         if self._spinbox is not None:
             self._spinbox.setMinimum(self._min_selected)
@@ -814,9 +816,10 @@ class ChipSelector:
         btn.clicked.connect(_remove)
         self._layout.insertWidget(self._insert_index_before_spacer(), btn)
 
-        idx = self._combo.findText(text)
-        if idx != -1:
-            self._combo.removeItem(idx)
+        if self._combo_remove:
+            idx = self._combo.findText(text)
+            if idx != -1:
+                self._combo.removeItem(idx)
         self._sync()
 
     def remove(self, text: str) -> None:
