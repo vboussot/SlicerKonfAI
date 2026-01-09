@@ -186,6 +186,10 @@ Internally, SlicerKonfAI typically:
 4. Monitors the running process (stdout/stderr) and streams logs to the Slicer interface.
 5. Imports the generated outputs back into Slicer (volumes, segmentations, uncertainty maps, metrics).
 
+## 📚 References
+
+Boussot, V. & Dillenseger, J.-L., **KonfAI: A Modular and Fully Configurable Framework for Deep Learning in Medical Imaging.** *arXiv:2508.09823*, 2025.  
+
 --- 
 
 > SlicerKonfAI = GUI + data exchange + process manager
@@ -193,5 +197,6 @@ Internally, SlicerKonfAI typically:
 > KonfAI = the engine that does all computations.
 
 ---
+
 
 
