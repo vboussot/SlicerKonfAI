@@ -158,9 +158,7 @@ def install_konfai() -> bool:
 
         with slicer_wait_popup(
             "KonfAI dependency upgrade",
-            f"Upgrading KonfAI from {installed} to {latest}...\n"
-            "This may take several minutes.\n\n"
-            "Do not close Slicer during installation.",
+            f"Upgrading KonfAI from {installed} to {latest}...\n" "This may take several minutes.\n\n",
         ):
             slicer.util.pip_install(f"konfai=={latest}")
     if installed is not None:
@@ -734,7 +732,7 @@ class ChipSelector:
         container_layout,
         spinbox=None,
         min_selected: int = 0,
-        combo_remove: bool = False,
+        combo_remove: bool = True,
         on_change: Callable[[list[str]], None] | None = None,
     ) -> None:
         self._combo = combo
@@ -2090,6 +2088,7 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         Open the current KonfAI app working directory in the file browser.
         """
         if self._current_konfai_app and self._current_konfai_app.get_work_dir():
+            print(self._current_konfai_app.get_work_dir())
             QDesktopServices.openUrl(QUrl.fromLocalFile(self._current_konfai_app.get_work_dir()))
 
     def _update_ram(self) -> None:
