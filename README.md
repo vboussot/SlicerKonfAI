@@ -1,3 +1,7 @@
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/vboussot/KonfAI/blob/main/LICENSE)
+[![CI](https://github.com/vboussot/KonfAI/actions/workflows/KonfAI_ci.yml/badge.svg)](https://github.com/vboussot/KonfAI/actions/workflows/KonfAI_ci.yml)
+[![Paper](https://img.shields.io/badge/📌%20Paper-KonfAI-blue)](https://www.arxiv.org/abs/2508.09823)
+
 # SlicerKonfAI
 
 <img src="KonfAI.png" alt="Slicer KonfAI Logo" width="300" align="right">
@@ -197,6 +201,7 @@ Boussot, V. & Dillenseger, J.-L., **KonfAI: A Modular and Fully Configurable Fra
 > KonfAI = the engine that does all computations.
 
 ---
+
 
 
 
