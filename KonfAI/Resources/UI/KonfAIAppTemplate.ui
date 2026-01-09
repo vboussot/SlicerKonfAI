@@ -48,7 +48,7 @@
                                     <item row="1" column="0">
                                        <widget class="QLabel" name="label_model">
                                           <property name="text">
-                                             <string>Model</string>
+                                             <string>KonfAI App</string>
                                           </property>
                                        </widget>
                                     </item>
@@ -57,45 +57,14 @@
                                           <item>
                                              <widget class="QComboBox" name="modelComboBox">
                                                 <property name="toolTip">
-                                                   <string>Choose model</string>
-                                                </property>
-                                             </widget>
-                                          </item>
-                                          <item>
-                                             <widget class="QPushButton" name="publishButton">
-                                                <property name="visible">
-                                                   <bool>false</bool>
-                                                </property>
-                                                <property name="toolTip">
-                                                   <string>Publish model</string>
-                                                </property>
-                                                <property name="text">
-                                                   <string>Publish</string>
-                                                </property>
-                                                <property name="autoDefault">
-                                                   <bool>false</bool>
-                                                </property>
-                                                <property name="default">
-                                                   <bool>false</bool>
-                                                </property>
-                                                <property name="maximumSize">
-                                                   <size>
-                                                      <width>100</width>
-                                                      <height>24</height>
-                                                   </size>
-                                                </property>
-                                                <property name="minimumSize">
-                                                   <size>
-                                                      <width>80</width>
-                                                      <height>24</height>
-                                                   </size>
+                                                   <string>Choose KonfAI app</string>
                                                 </property>
                                              </widget>
                                           </item>
                                           <item>
                                              <widget class="QPushButton" name="configButton">
                                                 <property name="toolTip">
-                                                   <string>Open config folder</string>
+                                                   <string>Open KonfAI app config folder</string>
                                                 </property>
                                                 <property name="iconSize">
                                                    <size>
@@ -129,7 +98,7 @@
                                           <item>
                                              <widget class="QPushButton" name="removeModelButton">
                                                 <property name="toolTip">
-                                                   <string>Remove model</string>
+                                                   <string>Remove KonfAI app</string>
                                                 </property>
                                                 <property name="icon">
                                                    <iconset>
@@ -169,7 +138,7 @@
                                           <item>
                                              <widget class="QPushButton" name="addModelButton">
                                                 <property name="toolTip">
-                                                   <string>Add model</string>
+                                                   <string>Add KonfAI app</string>
                                                 </property>
                                                 <property name="icon">
                                                    <iconset>

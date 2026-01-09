@@ -1691,7 +1691,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         ]
         arrays = [sitk.GetArrayFromImage(img) for img in images]
         stack = np.stack(arrays, axis=-1)
-        image = sitk.GetImageFromArray(stack)
+        image = sitk.GetImageFromArray(stack, isVector=True)
         image.CopyInformation(images[0])
 
         sitk.WriteImage(image, str(self._work_dir / "Volume.mha"))
