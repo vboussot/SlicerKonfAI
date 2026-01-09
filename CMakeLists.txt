@@ -9,7 +9,7 @@ set(EXTENSION_CATEGORY "Pipelines")
 set(EXTENSION_CONTRIBUTORS "Valentin Boussot (University of Rennes, France)")
 set(EXTENSION_DESCRIPTION "An extension enabling fast and configurable deep learning inference in 3D Slicer using KonfAI models from the Hugging Face repository.")
 set(EXTENSION_ICONURL "https://raw.githubusercontent.com/vboussot/SlicerKonfAI/main/KonfAI.png")
-set(EXTENSION_SCREENSHOTURLS "https://raw.githubusercontent.com/vboussot/SlicerKonfAI/main/docs/Inference.png" "https://raw.githubusercontent.com/vboussot/SlicerKonfAI/main/docs/Evaluation.png" "https://raw.githubusercontent.com/vboussot/SlicerKonfAI/main/docs/Uncertainty.png")
+set(EXTENSION_SCREENSHOTURLS "https://raw.githubusercontent.com/vboussot/SlicerKonfAI/main/docs/Inference.png https://raw.githubusercontent.com/vboussot/SlicerKonfAI/main/docs/Evaluation.png https://raw.githubusercontent.com/vboussot/SlicerKonfAI/main/docs/Uncertainty.png")
 set(EXTENSION_DEPENDS "NA")
 
 #-----------------------------------------------------------------------------
