@@ -1,3 +1,19 @@
+# Copyright (c) 2025 Valentin Boussot
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # flake8: noqa: E402
 import itertools
 import json
@@ -12,6 +28,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+import keyring
 import numpy as np
 import SimpleITK as sitk  # noqa: N813
 import sitkUtils
@@ -21,10 +38,14 @@ from qt import (
     QCheckBox,
     QCursor,
     QDesktopServices,
+    QDialog,
     QFileDialog,
     QFont,
+    QFormLayout,
+    QHBoxLayout,
     QIcon,
     QInputDialog,
+    QLabel,
     QLineEdit,
     QListWidgetItem,
     QMenu,
@@ -33,6 +54,7 @@ from qt import (
     QPushButton,
     QSettings,
     QSize,
+    QSpinBox,
     Qt,
     QTabWidget,
     QUrl,
@@ -47,6 +69,8 @@ from slicer.ScriptedLoadableModule import (
     ScriptedLoadableModuleWidget,
 )
 from slicer.util import VTKObservationMixin
+
+SERVICE = "KonfAI"
 
 
 def get_latest_pypi_version(package: str, timeout_s: float = 5.0) -> str | None:
@@ -113,6 +137,30 @@ def slicer_wait_popup(title: str, text: str):
         slicer.app.processEvents()
 
 
+def install_torch() -> bool:
+    try:
+        import torch
+
+        return True
+    except ImportError:
+        msg = (
+            "SlicerKonfAI requires PyTorch to be installed in 3D Slicer using the official SlicerPyTorch extension.\n\n"
+            "Step 1 – Install the SlicerPyTorch extension:\n"
+            "  • In Slicer, open:  View → Extensions Manager\n"
+            "  • Search for:  PyTorch (or SlicerPyTorch)\n"
+            "  • Install the extension and restart Slicer when prompted.\n\n"
+            "Step 2 – Install PyTorch using the SlicerPyTorch module:\n"
+            "  • Open:  View → Modules\n"
+            "  • Select:  Utilities → PyTorch\n"
+            "  • Click 'Install PyTorch and choose the CPU or GPU build\n"
+            "    that matches your system configuration.\n\n"
+        )
+
+        slicer.util.infoDisplay(msg, windowTitle="Prerequisite: PyTorch installation required")
+        slicer.util.selectModule("Data")
+        return False
+
+
 def install_konfai() -> bool:
     package = "konfai"
 
@@ -121,7 +169,7 @@ def install_konfai() -> bool:
 
     if latest is None:
         if installed is not None:
-            print(f"{package} installed ({installed}), PyPI unreachable -> keeping current.")
+            print(f"[Konfai] installed ({installed}), PyPI unreachable -> keeping current.")
             return True
         if not ask_user_to_install_dependency(
             "KonfAI",
@@ -144,6 +192,7 @@ def install_konfai() -> bool:
             return False
         with slicer_wait_popup("KonfAI dependency install", f"Installing KonfAI {latest}..."):
             slicer.util.pip_install(f"konfai=={latest}")
+            slicer.util.pip_install(f"keyring")
         return True
 
     if installed != latest:
@@ -189,6 +238,34 @@ def install_konfai() -> bool:
                 slicer.util.selectModule("Data")
                 return False
     return True
+
+
+def segmentation_node_to_labelmap(node):
+    labelmap_node = node
+    if node and node.IsA("vtkMRMLSegmentationNode"):
+        seg_node = node
+
+        labelmap_node = slicer.mrmlScene.AddNewNodeByClass(
+            "vtkMRMLLabelMapVolumeNode", seg_node.GetName() + "_labelmap"
+        )
+
+        slicer.modules.segmentations.logic().ExportAllSegmentsToLabelmapNode(seg_node, labelmap_node)
+
+    return labelmap_node
+
+
+def has_node_content(node) -> bool:
+    if not node:
+        return False
+
+    if node.IsA("vtkMRMLVolumeNode") or node.IsA("vtkMRMLLabelMapVolumeNode"):
+        return bool(node.GetImageData())
+
+    if node.IsA("vtkMRMLSegmentationNode"):
+        seg = node.GetSegmentation()
+        return seg is not None and seg.GetNumberOfSegments() > 0
+
+    return False
 
 
 class KonfAI(ScriptedLoadableModule):
@@ -472,8 +549,33 @@ class Process(QProcess):
         """
         Immediately terminate the running process, if any.
         """
-        self.kill()
-        self.waitForFinished(-1)
+        if self.state() == QProcess.ProcessState.NotRunning:
+            return
+        self.terminate()
+        if not self.waitForFinished(2000):
+            self.kill()
+            self.waitForFinished(-1)
+
+
+class RemoteServer:
+
+    def __init__(self, name: str, host: str, port: int) -> None:
+        self.name = name
+        self.host = host
+        self.port = port
+        self.token = keyring.get_password(SERVICE, str(self))
+        self.timeout = 3
+
+    def __str__(self) -> str:
+        return f"{self.name}|{self.host}|{self.port}"
+
+    def get_headers(self) -> dict[str, str]:
+        if self.token:
+            return {"Authorization": f"Bearer {self.token}"}
+        return {}
+
+    def get_url(self) -> str:
+        return f"http://{self.host}:{self.port}"
 
 
 class AppTemplateWidget(QWidget):
@@ -604,6 +706,13 @@ class AppTemplateWidget(QWidget):
         else:
             return []
 
+    def get_remote_server(self) -> tuple[RemoteServer | None, bool]:
+        if self._parameter_node is not None and self._parameter_node.GetParameter("RemoteServer") != "None|True":
+            name, host, port, ok = self._parameter_node.GetParameter("RemoteServer").split("|")
+            return RemoteServer(name, host, port) if host != "None" else None, eval(ok)
+        else:
+            return None, False
+
     def set_running(self, state: bool) -> None:
         """
         Update the 'is_running' flag in the parameter node.
@@ -629,15 +738,46 @@ class AppTemplateWidget(QWidget):
         If a process is already running:
           - Request termination of the process.
         """
+
         if not self.is_running():
             # Start a new operation
+            remote_server, ok = self.get_remote_server()
+            device = self.get_device()
+            if remote_server is not None:
+                from konfai import check_server
+
+                new_ok, msg = check_server(remote_server)
+                if ok != new_ok:
+                    if self._parameter_node is not None:
+                        self._parameter_node.SetParameter(
+                            "RemoteServer",
+                            f"{remote_server}|{new_ok}",
+                        )
+                    if new_ok:
+                        QMessageBox.information(
+                            self,
+                            "Remote server available",
+                            "The connection to the remote server has been restored.\n\n"
+                            "Please select the appropriate GPU and restart the operation.",
+                        )
+                        return
+
+                if not new_ok:
+                    QMessageBox.warning(
+                        self,
+                        "Remote server unreachable",
+                        f"{msg}.\n\n"
+                        "This remote server cannot be reached.\n"
+                        "Please edit the host/port or select another remote server.",
+                    )
+                    return
             self.remove_work_dir()
             self.create_new_work_dir()
             self.set_running(True)
             self._update_logs("Processing started.", True)
             self._update_progress(0, "0 it/s")
             try:
-                function()
+                function(remote_server, device)
             except Exception as e:
                 # Log the exception for debugging and reset running state
                 print(e)
@@ -646,10 +786,6 @@ class AppTemplateWidget(QWidget):
             # Stop current operation
             self.set_running(False)
             self.process.stop()
-            # Give the process some time to terminate properly
-            import time
-
-            time.sleep(3)
 
     def cleanup(self) -> None:
         """
@@ -708,6 +844,10 @@ class AppTemplateWidget(QWidget):
 
     def exit(self) -> None:
         pass
+
+    @abstractmethod
+    def on_remote_server_changed(self):
+        raise NotImplementedError
 
 
 class ChipSelector:
@@ -919,8 +1059,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.ui.removeModelButton.clicked.connect(self.on_remove_model)
 
         # Configuration button (opens folder containing KonfAI YAML configs)
-        icon_path = os.path.join(os.path.dirname(__file__), "Resources", "Icons", "gear.png")
-        self.ui.configButton.setIcon(QIcon(icon_path))
+        self.ui.configButton.setIcon(QIcon(resource_path("Icons/gear.png")))
         self.ui.configButton.setIconSize(QSize(18, 18))
         self.ui.configButton.clicked.connect(self.on_open_config)
 
@@ -935,6 +1074,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.chip_selector = ChipSelector(
             self.ui.checkpointsComboBox, self.ui.selectedCheckpointsWidget.layout(), self.ui.ensembleSpinBox, 1
         )
+        self.app_local_repositoy: list[str] = []
 
     def on_tta_changed(self):
         self.set_parameter("number_of_tta", str(self.ui.ttaSpinBox.value))
@@ -1002,24 +1142,20 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                 )
         self.update_parameter_node_from_gui()
 
-    def enter(self) -> None:
-        """
-        Overridden AppTemplateWidget entry point.
+    def on_remote_server_changed(self):
+        remote_sever, ok = self.get_remote_server()
+        self.populate_models(remote_sever, ok)
 
-        Re-initializes parameter node, GUI state and ensures model selection
-        is consistent when the widget is shown.
-        """
-        if not install_konfai():
-            return
-        if self.ui.modelComboBox.count == 0:
+    def populate_models(self, remote_server: RemoteServer | None, ok: bool):
+        from konfai.utils.utils import (
+            AppRepositoryError,
+            get_app_repository_info,
+            get_available_apps_on_hf_repo,
+            get_available_apps_on_remote_server,
+        )
 
-            from konfai.utils.utils import (
-                AppRepositoryHFError,
-                ModelDirectory,
-                ModelHF,
-                get_available_models_on_hf_repo,
-            )
-
+        models_name: list[str] = []
+        if remote_server is None:
             settings = QSettings()
             raw = settings.value(f"KonfAI-Settings/{self._name}/Models")
             models_name = []
@@ -1027,27 +1163,42 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                 models_name = json.loads(raw)
 
             default_models_name = []
-
             for konfai_repo in self._konfai_repo_list:
                 try:
                     default_models_name += [
-                        konfai_repo + ":" + model_name for model_name in get_available_models_on_hf_repo(konfai_repo)
+                        konfai_repo + ":" + model_name for model_name in get_available_apps_on_hf_repo(konfai_repo)
                     ]
-                except AppRepositoryHFError as e:
+                except AppRepositoryError as e:
                     slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
-            models_name = list(set(default_models_name + models_name))
 
-            # Populate the model combo box with models found in the provided Hugging Face repos
-            for model_name in sorted(models_name):
-                try:
-                    if len(model_name.split(":")) == 2:
-                        model = ModelHF(model_name.split(":")[0], model_name.split(":")[1])
-                    else:
-                        model = ModelDirectory(Path(model_name).parent, Path(model_name).name)
-                    self.ui.modelComboBox.addItem(model.get_display_name(), model)
-                except Exception as e:
-                    slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
-            self.ui.modelComboBox.currentIndexChanged.connect(self.on_model_selected)
+            models_name = list(set(default_models_name + models_name))
+            self.app_local_repositoy = models_name
+        elif ok:
+            models_name = [
+                f"{remote_server.host}:{remote_server.port}:{app_name}|{remote_server.token}"
+                for app_name in get_available_apps_on_remote_server(remote_server)
+            ]
+
+        self.ui.modelComboBox.clear()
+        # Populate the model combo box with models found in the provided Hugging Face repos or available app on remote server
+        for model_name in sorted(models_name):
+            try:
+                app_repository = get_app_repository_info(model_name)
+                self.ui.modelComboBox.addItem(app_repository.get_display_name(), app_repository)
+            except Exception as e:
+                slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
+        self.ui.modelComboBox.currentIndexChanged.connect(self.on_model_selected)
+
+    def enter(self) -> None:
+        """
+        Overridden AppTemplateWidget entry point.
+
+        Re-initializes parameter node, GUI state and ensures model selection
+        is consistent when the widget is shown.
+        """
+        if self.ui.modelComboBox.count == 0:
+            remote_server, ok = self.get_remote_server()
+            self.populate_models(remote_server, ok)
         super().enter()
         self.on_model_selected()
 
@@ -1129,7 +1280,11 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         configuring default output volume names.
         """
         input_volume = self.get_parameter_node("InputVolume")
-        if input_volume and self.ui.modelComboBox.currentData:
+        if (
+            has_node_content(input_volume)
+            and self.ui.modelComboBox.currentData
+            and self.ui.modelComboBox.currentData.get_number_of_models() > 0
+        ):
             self.ui.runInferenceButton.toolTip = _("Start inference")
             self.ui.runInferenceButton.enabled = True
         else:
@@ -1151,12 +1306,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         # Configure QA button depending on which tab is active
         if self.ui.qaTabWidget.currentWidget().name == "withRefTab":
             # Reference-based evaluation: need both input and reference volumes
-            if (
-                reference_volume
-                and reference_volume.GetImageData()
-                and input_evaluation_volume
-                and input_evaluation_volume.GetImageData()
-            ):
+            if has_node_content(reference_volume) and has_node_content(input_evaluation_volume):
                 self.ui.runEvaluationButton.toolTip = _("Start evaluation")
                 self.ui.runEvaluationButton.enabled = True
             else:
@@ -1216,7 +1366,12 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         # Removing model from disk is only relevant for custom (local) models;
         # by default we disable the button for HF models.
-        self.ui.removeModelButton.setEnabled(model.get_name().split(":")[0] not in self._konfai_repo_list)
+        remote_server, _ = self.get_remote_server()
+        if remote_server is not None:
+            self.ui.removeModelButton.setEnabled(False)
+            self.ui.addModelButton.setEnabled(False)
+        else:
+            self.ui.removeModelButton.setEnabled(model.get_name().split(":")[0] not in self._konfai_repo_list)
 
         # Reset description expansion state and update description label
         self._description_expanded = False
@@ -1237,7 +1392,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.ui.mcDropoutSpinBox.setMaximum(model._mc_dropout)
 
         # Enable QA sections based on model capabilities (evaluation/uncertainty support)
-        has_evaluation, has_uncertainty = model.has_capabilities()
+        has_inference, has_evaluation, has_uncertainty = model.has_capabilities()
         self.ui.evaluationCollapsible.setEnabled(has_evaluation or has_uncertainty)
         if not has_evaluation and not has_uncertainty:
             self.ui.evaluationCollapsible.collapsed = True
@@ -1272,7 +1427,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         This is intended for locally added models, not Hugging Face models.
         """
-        from konfai.utils.utils import ModelDirectory
+        from konfai.utils.utils import LocalAppRepositoryFromDirectory
 
         model = self.ui.modelComboBox.currentData
 
@@ -1293,9 +1448,10 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         index = self.ui.modelComboBox.findText(model.get_display_name())
         self.ui.modelComboBox.removeItem(index)
+        self.app_local_repositoy.remove(model.get_name())
 
         if chk.isChecked():
-            if isinstance(model, ModelDirectory):
+            if isinstance(model, LocalAppRepositoryFromDirectory):
                 try:
                     shutil.rmtree(model.get_name())
                     QMessageBox.information(
@@ -1314,8 +1470,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         if model is None:
             return
 
-        _, inference_file_path, _ = model.download_inference(0, [], "Prediction.yml")
-        QDesktopServices.openUrl(QUrl.fromLocalFile(Path(inference_file_path).parent))
+        config_files = model.download_config_file()
+        QDesktopServices.openUrl(QUrl.fromLocalFile(config_files[0].parent))
 
     def on_add_model(self) -> None:
         """
@@ -1363,6 +1519,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             return
         self.ui.modelComboBox.addItem(model.get_display_name(), model)
         self.ui.modelComboBox.setCurrentIndex(self.ui.modelComboBox.findData(model))
+        self.app_local_repositoy.append(model.get_name())
 
     def ask_subdir(self, dirs: list[str]) -> str | None:
         """
@@ -1448,6 +1605,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
             self.ui.modelComboBox.addItem(model.get_display_name(), model)
             self.ui.modelComboBox.setCurrentIndex(self.ui.modelComboBox.findData(model))
+            self.app_local_repositoy.append(model.get_name())
 
     def on_add_ft(self) -> None:
         """
@@ -1503,6 +1661,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         model_ft = ModelDirectory(Path(parent_dir), name)
         self.ui.modelComboBox.addItem(model_ft.get_display_name(), model_ft)
         self.ui.modelComboBox.setCurrentIndex(self.ui.modelComboBox.findData(model_ft))
+        self.app_local_repositoy.append(model_ft.get_name())
 
     def on_tab_changed(self) -> None:
         """
@@ -1532,12 +1691,13 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
     def cleanup(self) -> None:
         super().cleanup()
         settings = QSettings()
-        settings.setValue(
-            f"KonfAI-Settings/{self._name}/Models",
-            json.dumps([self.ui.modelComboBox.itemData(i).get_name() for i in range(self.ui.modelComboBox.count)]),
-        )
+        if len(self.app_local_repositoy) > 0:
+            settings.setValue(
+                f"KonfAI-Settings/{self._name}/Models",
+                json.dumps(self.app_local_repositoy),
+            )
 
-    def evaluation(self) -> None:
+    def evaluation(self, remote_server: RemoteServer, devices: list[str]) -> None:
         """
         Run reference-based evaluation using the selected model.
 
@@ -1561,10 +1721,15 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             self.ui.inputVolumeEvaluationSelector.currentNode().GetName() + "_toRef",
         )
 
+        input_volume_evaluation_node = segmentation_node_to_labelmap(
+            self.ui.inputVolumeEvaluationSelector.currentNode()
+        )
+        reference_volume_evaluation_node = segmentation_node_to_labelmap(self.ui.referenceVolumeSelector.currentNode())
+
         # Resample the input volume to match the reference grid, using the selected transform
         params = {
-            "inputVolume": self.ui.inputVolumeEvaluationSelector.currentNode().GetID(),
-            "referenceVolume": self.ui.referenceVolumeSelector.currentNode().GetID(),
+            "inputVolume": input_volume_evaluation_node.GetID(),
+            "referenceVolume": reference_volume_evaluation_node.GetID(),
             "outputVolume": output_node.GetID(),
             "interpolationType": "linear",
             "warpTransform": self.ui.inputTransformSelector.currentNode().GetID(),
@@ -1582,7 +1747,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         volume_storage_node = slicer.mrmlScene.CreateNodeByClass("vtkMRMLVolumeArchetypeStorageNode")
         volume_storage_node.SetFileName(str(self._work_dir / "Reference.mha"))
         volume_storage_node.UseCompressionOff()
-        volume_storage_node.WriteData(self.ui.referenceVolumeSelector.currentNode())
+        volume_storage_node.WriteData(reference_volume_evaluation_node)
         volume_storage_node.UnRegister(None)
 
         model = self.ui.modelComboBox.currentData
@@ -1600,7 +1765,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         ]
 
         # Optional: resample and include the reference mask if defined
-        if self.ui.referenceMaskSelector.currentNode() and self.ui.referenceMaskSelector.currentNode().GetImageData():
+        if has_node_content(self.ui.referenceMaskSelector.currentNode()):
             output_node = slicer.mrmlScene.AddNewNodeByClass(
                 "vtkMRMLScalarVolumeNode",
                 self.ui.referenceMaskSelector.currentNode().GetName() + "_toRef",
@@ -1624,10 +1789,13 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             args += ["--mask", "Mask.mha"]
 
         # Select device backend from parameter node (GPU indices or CPU fallback)
-        if self.get_device():
-            args += ["--gpu"] + self.get_device()
+        if devices:
+            args += ["--gpu"] + devices
         else:
             args += ["--cpu", "1"]
+
+        if remote_server is not None:
+            args += ["--host", remote_server.host, "--port", remote_server.port, "--token", remote_server.token]
 
         def on_end_function() -> None:
             """
@@ -1652,11 +1820,12 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             # Populate the image list with all .mha images in the Evaluation folder
             self.evaluation_panel.refresh_images_list(Path(next((self._work_dir / "Evaluation").rglob("*.mha")).parent))
             self._update_logs("Processing finished.")
+            self._update_progress(100)
             self.set_running(False)
 
         self.process.run("konfai-apps", self._work_dir, args, on_end_function)
 
-    def uncertainty(self) -> None:
+    def uncertainty(self, remote_server: RemoteServer | None, devices: list[str]) -> None:
         """
         Run uncertainty analysis using the selected model.
 
@@ -1679,10 +1848,13 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         ]
 
         # Device selection (GPU or CPU)
-        if self.get_device():
-            args += ["--gpu"] + self.get_device()
+        if devices:
+            args += ["--gpu"] + devices
         else:
             args += ["--cpu", "1"]
+
+        if remote_server is not None:
+            args += ["--host", remote_server.host, "--port", remote_server.port, "--token", remote_server.token]
 
         n = self.ui.inputVolumeSequenceSelector.currentNode().GetNumberOfDataNodes()
         images = [
@@ -1709,6 +1881,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
             if not any((self._work_dir / "Uncertainty").rglob("*.json")):
                 self.set_running(False)
+                return
 
             from konfai.evaluator import Statistics
 
@@ -1718,11 +1891,12 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                 Path(next((self._work_dir / "Uncertainty").rglob("*.mha")).parent)
             )
             self._update_logs("Processing finished.")
+            self._update_progress(100)
             self.set_running(False)
 
         self.process.run("konfai-apps", self._work_dir, args, on_end_function)
 
-    def inference(self) -> None:
+    def inference(self, remote_server: RemoteServer | None, devices: list[str]) -> None:
         """
         Run inference using the selected KonfAI model.
 
@@ -1732,10 +1906,12 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
           - Load the resulting MHA files back into Slicer and update display
           - Populate uncertainty panel with the generated stack if available
         """
+
         self.evaluation_panel.clear_images_list()
         self.uncertainty_panel.clear_images_list()
         self.evaluation_panel.clear_metrics()
         self.uncertainty_panel.clear_metrics()
+
         model = self.ui.modelComboBox.currentData
         args = [
             "infer",
@@ -1753,10 +1929,14 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         ]
 
         # Device selection (GPU or CPU)
-        if self.get_device():
-            args += ["--gpu"] + self.get_device()
+        if devices:
+            args += ["--gpu"] + devices
         else:
             args += ["--cpu", "1"]
+
+        if remote_server is not None:
+            args += ["--host", remote_server.host, "--port", remote_server.port, "--token", remote_server.token]
+
         input_node = self.ui.inputVolumeSelector.currentNode()
 
         # Export volume to disk using SimpleITK
@@ -1804,7 +1984,12 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             # Decide if output should be a label map (uint8) or scalar volume
             want_label = data.dtype == np.uint8
             expected_class = "vtkMRMLSegmentationNode" if want_label else "vtkMRMLScalarVolumeNode"
-            base_name = "OutputSegmentation" if want_label else "OutputVolume"
+            base_name = (
+                self.ui.outputVolumeSelector.baseName
+                + "_"
+                + model.get_name()
+                + ("_Segmentation" if want_label else "_Output")
+            )
 
             node = slicer.mrmlScene.AddNewNodeByClass(expected_class, base_name)
             self.ui.outputVolumeSelector.setCurrentNode(node)
@@ -1831,7 +2016,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                         segment.SetName(segment_name)
 
                 slicer.mrmlScene.RemoveNode(tmp_labelmap)
-
+                segmentation_node_to_labelmap(node)
             else:
                 # Populate the node with the first channel of the prediction data
                 slicer.util.updateVolumeFromArray(node, data[0])
@@ -1886,9 +2071,168 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                     break
 
             self._update_logs("Processing finished.")
+            self._update_progress(100)
             self.set_running(False)
 
         self.process.run("konfai-apps", self._work_dir, args, on_end_function)
+
+
+class RemoteServerConfigDialog(QDialog):
+
+    def __init__(self, remote_server: RemoteServer):
+        super().__init__()
+        self.remote_server = remote_server
+        self.setWindowTitle(f"Configure server: {remote_server.name}")
+        self.setModal(True)
+
+        self._remove = False  # <-- flag
+
+        self.hostEdit = QLineEdit(remote_server.host)
+        self.portSpin = QSpinBox()
+        self.portSpin.setRange(1, 65535)
+        self.portSpin.setValue(int(remote_server.port))
+        self.tokenEdit = QLineEdit(remote_server.token)
+        self.tokenEdit.setPlaceholderText("Optional (Bearer token)")
+        self.tokenEdit.setEchoMode(QLineEdit.EchoMode.Password)
+
+        self.statusLabel = QLabel("")
+        self.statusLabel.setWordWrap(True)
+
+        self.checkButton = QPushButton("Check")
+        self.saveButton = QPushButton("Save")
+        self.removeButton = QPushButton("Remove")
+        self.cancelButton = QPushButton("Cancel")
+
+        form = QFormLayout()
+        form.addRow("Host", self.hostEdit)
+        form.addRow("Port", self.portSpin)
+        form.addRow("Token", self.tokenEdit)
+
+        btns = QHBoxLayout()
+        btns.addWidget(self.checkButton)
+        btns.addStretch(1)
+        btns.addWidget(self.removeButton)
+        btns.addWidget(self.saveButton)
+        btns.addWidget(self.cancelButton)
+
+        root = QVBoxLayout(self)
+        root.addLayout(form)
+        root.addWidget(self.statusLabel)
+        root.addLayout(btns)
+
+        self.cancelButton.clicked.connect(lambda _=False: self.reject())
+        self.saveButton.clicked.connect(lambda _=False: self.on_save())
+        self.removeButton.clicked.connect(lambda _=False: self.on_remove())
+        self.checkButton.clicked.connect(lambda _=False: self.on_check())
+
+    def on_check(self) -> bool:
+        self.remote_server.host = self.hostEdit.text.strip()
+        self.remote_server.port = int(self.portSpin.value)
+        self.remote_server.token = self.tokenEdit.text.strip()
+        from konfai import check_server
+
+        ok, msg = check_server(self.remote_server)
+        self.statusLabel.setText(("✅ " if ok else "❌ ") + msg)
+        return ok
+
+    def on_remove(self):
+        self._remove = True
+        self.accept()
+
+    def on_save(self):
+        if self.on_check():
+            self.accept()
+
+    def get(self) -> RemoteServer:
+        self.remote_server.host = self.hostEdit.text.strip()
+        self.remote_server.port = int(self.portSpin.value)
+        self.remote_server.token = self.tokenEdit.text.strip()
+        keyring.set_password(SERVICE, str(self.remote_server), self.remote_server.token)
+        return self.remote_server
+
+    def want_remove(self) -> bool:
+        return self._remove
+
+
+class RemoteServerAddDialog(QDialog):
+    def __init__(self, remote_servers_name: list[str]):
+        super().__init__()
+        self.remote_servers_name = remote_servers_name
+        self.setWindowTitle("Add remote server")
+        self.setModal(True)
+
+        self.nameEdit = QLineEdit("")
+        self.hostEdit = QLineEdit("127.0.0.1")
+        self.portSpin = QSpinBox()
+        self.portSpin.setRange(1, 65535)
+        self.portSpin.setValue(8000)
+        self.tokenEdit = QLineEdit("")
+        self.tokenEdit.setPlaceholderText("Optional (Bearer token)")
+        self.tokenEdit.setEchoMode(QLineEdit.EchoMode.Password)
+
+        self.statusLabel = QLabel("")
+        self.statusLabel.setWordWrap(True)
+
+        self.checkButton = QPushButton("Check")
+        self.addButton = QPushButton("Add")
+        self.cancelButton = QPushButton("Cancel")
+
+        form = QFormLayout()
+        form.addRow("Name", self.nameEdit)
+        form.addRow("Host", self.hostEdit)
+        form.addRow("Port", self.portSpin)
+        form.addRow("Token", self.tokenEdit)
+
+        btns = QHBoxLayout()
+        btns.addWidget(self.checkButton)
+        btns.addStretch(1)
+        btns.addWidget(self.addButton)
+        btns.addWidget(self.cancelButton)
+
+        root = QVBoxLayout(self)
+        root.addLayout(form)
+        root.addWidget(self.statusLabel)
+        root.addLayout(btns)
+
+        self.checkButton.clicked.connect(self.on_check)
+        self.addButton.clicked.connect(self.on_add)
+        self.cancelButton.clicked.connect(lambda _=False: self.reject())
+
+    def on_check(self) -> bool:
+        remote_server = self.get()
+        from konfai import check_server
+
+        ok, msg = check_server(remote_server)
+        self.statusLabel.setText(("✅ " if ok else "❌ ") + msg)
+        return ok
+
+    def on_add(self):
+        name = self.nameEdit.text.strip()
+        if not name:
+            self.statusLabel.setText("❌ Name is required")
+            return
+        if name in self.remote_servers_name:
+            self.statusLabel.setText("❌ This server name already exists.")
+            return
+        if self.on_check():
+            self.accept()
+
+    def get(self) -> RemoteServer:
+        name = self.nameEdit.text.strip()
+        host = self.hostEdit.text.strip()
+        port = int(self.portSpin.value)
+
+        token = self.tokenEdit.text.strip() or None
+        id = f"{name}|{host}|{port}"
+        if token:
+            keyring.set_password(SERVICE, id, token)
+        else:
+            try:
+                keyring.delete_password(SERVICE, id)
+            except keyring.errors.PasswordDeleteError:
+                pass
+
+        return RemoteServer(name, host, port)
 
 
 class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic):
@@ -1928,7 +2272,6 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         self.initialize_parameter_node()
         # Set header title
         self.ui.headerTitleLabel.text = title
-        self.ui.deviceComboBox.currentIndexChanged.connect(self.on_device_changed)
 
         # Observe scene close/open to keep parameter node in sync
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.StartCloseEvent, self.on_scene_start_close)
@@ -1939,6 +2282,116 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         self.ui.openTempButton.setIconSize(QSize(18, 18))
         self.ui.openTempButton.clicked.connect(self.on_open_work_dir)
         self.ui.openTempButton.setEnabled(False)
+
+        # Remote Server Configuration button
+        self.ui.remoteServerConfigButton.setIcon(QIcon(resource_path("Icons/gear.png")))
+        self.ui.remoteServerConfigButton.setIconSize(QSize(18, 18))
+        self.ui.remoteServerConfigButton.clicked.connect(self.on_remote_server_config)
+
+        self.ui.remoteServerAddButton.clicked.connect(self.on_add_remote_server)
+        self.ui.remoteServerComboBox.currentIndexChanged.connect(self.on_remote_server_changed)
+
+        self.ui.deviceComboBox.currentIndexChanged.connect(self.on_device_changed)
+        self.ui.remoteServerComboBox.setStyleSheet(
+            """
+            QComboBox[status="ok"]  { color: rgb(0,160,0); }
+            QComboBox[status="bad"] { color: rgb(200,0,0); }
+            """
+        )
+
+    def _set_remote_server_item_color(self, ok: bool) -> None:
+        combo = self.ui.remoteServerComboBox
+        combo.setProperty("status", "ok" if ok else "bad")
+        combo.style().unpolish(combo)
+        combo.style().polish(combo)
+        combo.update()
+
+    def on_remote_server_changed(self):
+        remote_server = self.ui.remoteServerComboBox.currentData
+
+        was_blocked = self.ui.deviceComboBox.blockSignals(True)
+        self.ui.deviceComboBox.clear()
+        self.ui.deviceComboBox.blockSignals(was_blocked)
+        self.ui.remoteServerConfigButton.setEnabled(remote_server is not None)
+
+        if remote_server is not None:
+            from konfai import check_server
+
+            ok, msg = check_server(remote_server)
+            self._set_remote_server_item_color(ok)
+            if not ok:
+                if self._parameter_node is not None:
+                    self._parameter_node.SetParameter("Device", "None")
+                    self._parameter_node.SetParameter(
+                        "RemoteServer",
+                        f"{remote_server}|False",
+                    )
+                return
+        else:
+            self._set_remote_server_item_color(True)
+
+        available_devices = self._get_available_devices()
+        was_blocked = self.ui.deviceComboBox.blockSignals(True)
+        for available_device in available_devices:
+            self.ui.deviceComboBox.addItem(available_device[0], available_device[1])
+        self.ui.deviceComboBox.blockSignals(was_blocked)
+
+        index = -1
+        if self._parameter_node:
+            devices = self._parameter_node.GetParameter("Device")
+            if devices == "None":
+                index = 0
+            else:
+                index = self.ui.deviceComboBox.findData(devices.split(","))
+
+        if index == -1:
+            index = self.ui.deviceComboBox.count - 1
+        self.ui.deviceComboBox.setCurrentIndex(index)
+        if index == 0:
+            self.on_device_changed()
+
+        if self._parameter_node is not None:
+            self._parameter_node.SetParameter(
+                "RemoteServer",
+                f"{self.ui.remoteServerComboBox.currentData}|True",
+            )
+
+        self._update_ram()
+        if self._current_konfai_app:
+            self._current_konfai_app.on_remote_server_changed()
+
+    def on_remote_server_config(self):
+        index = self.ui.remoteServerComboBox.currentIndex
+        if index < 0:
+            return
+
+        remote_server = self.ui.remoteServerComboBox.currentData
+
+        dlg = RemoteServerConfigDialog(remote_server)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        if dlg.want_remove():
+            self.ui.remoteServerComboBox.removeItem(index)
+            return
+
+        self.ui.remoteServerComboBox.setItemData(index, dlg.get())
+        self.on_remote_server_changed()
+
+    def on_add_remote_server(self):
+        remote_servers_name = [
+            self.ui.remoteServerComboBox.itemText(i) for i in range(self.ui.remoteServerComboBox.count)
+        ]
+
+        dlg = RemoteServerAddDialog(remote_servers_name)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        remote_server = dlg.get()
+
+        # update combobox
+        self.ui.remoteServerComboBox.addItem(remote_server.name, remote_server)
+        self.ui.remoteServerComboBox.setCurrentText(remote_server.name)
 
     def register_apps(self, apps: list[AppTemplateWidget]) -> None:
         """
@@ -2001,7 +2454,6 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
 
         if self._parameter_node is not None:
             self._parameter_node.SetParameter("is_running", "False")
-            self.on_device_changed()
         self.update_gui_from_parameter_node()
 
     def update_gui_from_parameter_node(self, caller=None, event=None) -> None:
@@ -2018,6 +2470,7 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
 
             # Enable work directory button only when an app has an active work dir
             self.ui.openTempButton.setEnabled(self._current_konfai_app.get_work_dir() is not None)
+            # self.on_remote_server_changed()
 
     def on_scene_start_close(self, caller, event) -> None:
         """
@@ -2038,7 +2491,7 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         """
         self.initialize_parameter_node()
 
-    def _get_available_devices(self) -> list[tuple[str, str | None]]:
+    def _get_available_devices(self) -> list[tuple[str, list[int] | None]]:
         """
         Return the list of available computation devices.
 
@@ -2051,22 +2504,22 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
             List of (display_label, device_index_string or None) tuples.
         """
         # CPU fallback
-        available_devices: list[tuple[str, str | None]] = [("cpu [slow]", None)]
-        from torch.cuda import device_count, get_device_name, is_available
+        available_devices: list[tuple[str, list[int] | None]] = [("cpu [slow]", None)]
+        remote_server = self.ui.remoteServerComboBox.currentData
 
-        if is_available():
-            # Build combinations of GPU indices, so multi-GPU usage can be exposed
-            combos: list[Any] = []
-            nb_gpu = device_count()
-            for r in range(1, nb_gpu + 1):
-                combos.extend(itertools.combinations(range(nb_gpu), r))
-            for device in combos:
-                device_name = get_device_name(device[0])
-                index = str(device[0])
-                for i in device[1:]:
-                    device_name += f",{get_device_name(i)}"
-                    index += f",{i}"
-                available_devices.append((f"gpu {index} - {device_name}", index))
+        from konfai import get_available_devices
+
+        device_index, device_name = get_available_devices(remote_server)
+        devices = [(device_index, device_name) for device_index, device_name in zip(device_index, device_name)]
+
+        combos: list[Any] = []
+        # Build combinations of GPU indices, so multi-GPU usage can be exposed
+        for r in range(1, len(devices) + 1):
+            combos.extend(itertools.combinations(devices, r))
+        for device in combos:
+            devices_index_str = ",".join([str(index) for index, _ in device])
+            devices_name = ",".join([name for _, name in device])
+            available_devices.append((f"gpu {devices_index_str} - {devices_name}", [index for index, _ in device]))
         return available_devices
 
     def on_device_changed(self) -> None:
@@ -2080,7 +2533,11 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         if self._parameter_node is not None:
             self._parameter_node.SetParameter(
                 "Device",
-                self.ui.deviceComboBox.currentData if self.ui.deviceComboBox.currentData else "None",
+                (
+                    ",".join([str(index) for index in self.ui.deviceComboBox.currentData])
+                    if self.ui.deviceComboBox.currentData
+                    else "None"
+                ),
             )
 
     def on_open_work_dir(self) -> None:
@@ -2088,7 +2545,6 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         Open the current KonfAI app working directory in the file browser.
         """
         if self._current_konfai_app and self._current_konfai_app.get_work_dir():
-            print(self._current_konfai_app.get_work_dir())
             QDesktopServices.openUrl(QUrl.fromLocalFile(self._current_konfai_app.get_work_dir()))
 
     def _update_ram(self) -> None:
@@ -2097,15 +2553,10 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
 
         If usage exceeds 80%, the progress bar color is set to red.
         """
-        try:
-            import psutil
+        remote_server = self.ui.remoteServerComboBox.currentData
+        from konfai import get_ram
 
-            ram = psutil.virtual_memory()
-            used_gb = (ram.total - ram.available) / (1024**3)
-            total_gb = ram.total / (1024**3)
-        except:
-            used_gb = 0
-            total_gb = 32
+        used_gb, total_gb = get_ram(remote_server)
 
         self.ui.ramLabel.text = _("RAM used: {used:.1f} GB / {total:.1f} GB").format(used=used_gb, total=total_gb)
         self.ui.ramProgressBar.value = used_gb / total_gb * 100
@@ -2138,45 +2589,33 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         """
         device = self.ui.deviceComboBox.currentData
         if device is not None:
-            try:
-                used_gb = 0.0
-                total_gb = 0.0
-                import pynvml
+            remote_server = self.ui.remoteServerComboBox.currentData
+            from konfai import get_vram
 
-                pynvml.nvmlInit()
-                for index in device.split(","):
-                    info = pynvml.nvmlDeviceGetMemoryInfo(pynvml.nvmlDeviceGetHandleByIndex(int(index)))
-                    used_gb += info.used / (1024**3)
-                    total_gb += info.total / (1024**3)
+            used_gb, total_gb = get_vram(device, remote_server)
 
-                self.ui.gpuLabel.show()
-                self.ui.gpuProgressBar.show()
-                self.ui.gpuLabel.text = _("VRAM used: {used:.1f} GB / {total:.1f} GB").format(
-                    used=used_gb, total=total_gb
+            self.ui.gpuLabel.show()
+            self.ui.gpuProgressBar.show()
+            self.ui.gpuLabel.text = _("VRAM used: {used:.1f} GB / {total:.1f} GB").format(used=used_gb, total=total_gb)
+            self.ui.gpuProgressBar.value = used_gb / total_gb * 100
+
+            if used_gb / total_gb * 100 > 80:
+                self.ui.gpuProgressBar.setStyleSheet(
+                    """
+                    QProgressBar::chunk {
+                        background-color: #e74c3c;
+                    }
+                """
                 )
-                self.ui.gpuProgressBar.value = used_gb / total_gb * 100
-
-                if used_gb / total_gb * 100 > 80:
-                    self.ui.gpuProgressBar.setStyleSheet(
-                        """
-                        QProgressBar::chunk {
-                            background-color: #e74c3c;
-                        }
+            else:
+                # Green otherwise
+                self.ui.gpuProgressBar.setStyleSheet(
                     """
-                    )
-                else:
-                    # Green otherwise
-                    self.ui.gpuProgressBar.setStyleSheet(
-                        """
-                        QProgressBar::chunk {
-                            background-color: #2ecc71;
-                        }
-                    """
-                    )
-
-            except Exception:
-                # If NVML or GPU query fails, VRAM usage is reported as not available
-                self.ui.gpuLabel.text = _("VRAM used: n/a")
+                    QProgressBar::chunk {
+                        background-color: #2ecc71;
+                    }
+                """
+                )
         else:
             # Hide VRAM widgets when CPU is selected
             self.ui.gpuLabel.hide()
@@ -2196,7 +2635,7 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         else:
             self.ui.logText.appendPlainText(text)
 
-    def update_progress(self, value: int, speed: float) -> None:
+    def update_progress(self, value: int, speed: float | None = None) -> None:
         """
         Update the progress bar and speed label.
 
@@ -2207,10 +2646,9 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         speed : float | str
             Human-readable speed information, e.g. "5.2 it/s".
         """
-        self._update_ram()
-        self._update_vram()
         self.ui.progressBar.value = value
-        self.ui.speedLabel.text = _("{speed}").format(speed=speed)
+        if speed:
+            self.ui.speedLabel.text = _("{speed}").format(speed=speed)
 
     def cleanup(self) -> None:
         """
@@ -2219,57 +2657,65 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         Delegates cleanup to each registered KonfAI app (e.g., to remove
         temporary working directories).
         """
+        self.removeObservers()
+
+        settings = QSettings()
+        data = {}
+        for i in range(self.ui.remoteServerComboBox.count):
+            rs = self.ui.remoteServerComboBox.itemData(i)
+
+            if rs is not None:
+                data[rs.name] = {
+                    "host": rs.host,
+                    "port": rs.port,
+                }
+
+        settings.setValue(
+            "KonfAI-Settings/RemoteServers",
+            json.dumps(data),
+        )
+
         for app in self._apps.values():
             app.cleanup()
 
-    def install_torch(self) -> bool:
-        try:
-            import torch
-
-            return True
-        except ImportError:
-            msg = (
-                "SlicerKonfAI requires PyTorch to be installed in 3D Slicer using the official SlicerPyTorch extension.\n\n"
-                "Step 1 – Install the SlicerPyTorch extension:\n"
-                "  • In Slicer, open:  View → Extensions Manager\n"
-                "  • Search for:  PyTorch (or SlicerPyTorch)\n"
-                "  • Install the extension and restart Slicer when prompted.\n\n"
-                "Step 2 – Install PyTorch using the SlicerPyTorch module:\n"
-                "  • Open:  View → Modules\n"
-                "  • Select:  Utilities → PyTorch\n"
-                "  • Click 'Install PyTorch and choose the CPU or GPU build\n"
-                "    that matches your system configuration.\n\n"
-            )
-
-            slicer.util.infoDisplay(msg, windowTitle="Prerequisite: PyTorch installation required")
-            slicer.util.selectModule("Data")
-            return False
-
     def enter(self) -> None:
-        if not self.install_torch():
+        if not install_torch():
             return
-        if self.ui.deviceComboBox.count == 0:
-            available_devices = self._get_available_devices()
-            for available_device in available_devices:
-                self.ui.deviceComboBox.addItem(available_device[0], available_device[1])
+        if not install_konfai():
+            return
+        is_first = False
+        if self.ui.remoteServerComboBox.count == 0:
+            is_first = True
+            was_blocked = self.ui.remoteServerComboBox.blockSignals(True)
+            settings = QSettings()
+            raw = settings.value(f"KonfAI-Settings/RemoteServers")
+            self.ui.remoteServerComboBox.addItem("Localhost", None)
 
-            # Default to the last device entry (typically a GPU combo if available)
-            self.ui.deviceComboBox.setCurrentIndex(len(available_devices) - 1)
+            if raw is not None:
+                for name, d in json.loads(raw).items():
+                    remote_server = RemoteServer(
+                        name=name,
+                        host=d["host"],
+                        port=int(d["port"]),
+                    )
+                    self.ui.remoteServerComboBox.addItem(name, remote_server)
+            self.ui.remoteServerComboBox.blockSignals(was_blocked)
 
-        index = -1
+        index = 0
         if self._parameter_node:
-            devices = self._parameter_node.GetParameter("Device")
-            index = self.ui.deviceComboBox.findData(devices if devices != "None" else None)
+            remote_server = self._parameter_node.GetParameter("RemoteServer")
+            if remote_server.split("|")[0] != "None":
+                index = self.ui.remoteServerComboBox.findText(remote_server.split("|")[0])
 
-        if index != -1:
-            self.ui.deviceComboBox.setCurrentIndex(index)
-        else:
-            self.ui.deviceComboBox.setCurrentIndex(self.ui.deviceComboBox.count - 1)
+        if index == -1:
+            index = self.ui.remoteServerComboBox.count - 1
+        if self.ui.remoteServerComboBox.currentIndex != index or is_first:
+            self.ui.remoteServerComboBox.setCurrentIndex(index)
+            if index == 0:
+                self.on_remote_server_changed()
 
         if self._current_konfai_app:
             self._current_konfai_app.enter()
-        # Initialize log display
-        self._update_ram()
 
     def exit(self) -> None:
         if self._current_konfai_app:
@@ -2278,12 +2724,12 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
 
 def _is_reload_setup(moduleName: str) -> bool:
     key = f"{moduleName}.wasSetupOnce"
-    was = bool(slicer.app.property(key))  # False si jamais défini
-    slicer.app.setProperty(key, True)  # Marque pour les prochains setup()
-    return was  # True => c’est un reload (ou une 2e init)
+    was = bool(slicer.app.property(key))
+    slicer.app.setProperty(key, True)
+    return was
 
 
-class KonfAIWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
+class KonfAIWidget(ScriptedLoadableModuleWidget):
     """
     Top-level scripted loadable module widget for KonfAI.
 
@@ -2296,7 +2742,6 @@ class KonfAIWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         Called when the user opens the module the first time and the widget is initialized.
         """
         super().__init__(parent)
-        VTKObservationMixin.__init__(self)
 
     def setup(self) -> None:
         """
@@ -2325,7 +2770,6 @@ class KonfAIWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         """
         Called when the application closes and the module widget is destroyed.
         """
-        self.removeObservers()
         self.konfai_core.cleanup()
 
     def enter(self) -> None:
