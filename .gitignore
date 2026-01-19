@@ -3,4 +3,4 @@
 .pytest_cache
 .mypy_cache
 __pycache__
-ImpactSynth/__pycache__
+.vscode

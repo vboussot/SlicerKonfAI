@@ -21,12 +21,13 @@ import os
 import random
 import re
 import shutil
+import time
 import urllib.request
 from abc import abstractmethod
 from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import keyring
 import numpy as np
@@ -461,14 +462,20 @@ class Process(QProcess):
       - Forward stderr lines to the console for debugging
     """
 
-    def __init__(self, _update_logs, _update_progress):
+    def __init__(
+        self,
+        update_logs: Callable[[str, bool | None], None],
+        update_progress: Callable[[int, str | None | None], None],
+        running_setter: Callable[[bool], None],
+    ):
         super().__init__(self)
         self.readyReadStandardOutput.connect(self.on_stdout_ready)
         self.readyReadStandardError.connect(self.on_stderr_ready)
 
         # Callbacks defined by the KonfAI core widget
-        self._update_logs = _update_logs
-        self._update_progress = _update_progress
+        self._update_logs = update_logs
+        self._update_progress = update_progress
+        self._running_setter = running_setter
 
     def on_stdout_ready(self) -> None:
         """
@@ -486,7 +493,7 @@ class Process(QProcess):
             line = line.replace("\r\n", "\n").split("\r")[-1]
 
             # Forward to the log callback
-            self._update_logs(line)
+            self._update_logs(line, False)
 
             # Parse progress percentage if present (e.g., " 45% 123/456")
             m = re.search(r"\b(\d{1,3})%(?=\s+\d+/\d+)", line)
@@ -516,7 +523,7 @@ class Process(QProcess):
 
         print("Error : ", self.readAllStandardError().data().decode().strip())
 
-    def run(self, command: str, work_dir: Path, args: list[str], on_end_function) -> None:
+    def run(self, command: str, work_dir: Path, args: list[str], on_end_function: Callable[[], None]) -> None:
         """
         Start a new subprocess with the given command and arguments.
 
@@ -533,6 +540,8 @@ class Process(QProcess):
         """
         self.setWorkingDirectory(str(work_dir))
 
+        t0 = time.perf_counter()
+
         # Disconnect any previous 'finished' slot to avoid stacking connections
         try:
             self.finished.disconnect()
@@ -540,7 +549,26 @@ class Process(QProcess):
             # No slot connected yet
             pass
 
-        self.finished.connect(on_end_function)
+        def _on_finished() -> None:
+            if self.exitStatus() != QProcess.NormalExit:
+                self._running_setter(False)
+                return
+            on_end_function()
+            dt = time.perf_counter() - t0
+            h, r = divmod(dt, 3600)
+            m, s = divmod(r, 60)
+            if h >= 1:
+                msg = f"{int(h)}h {int(m)}m {s:.1f}s."
+            elif m >= 1:
+                msg = f"{int(m)}m {s:.1f}s."
+            else:
+                msg = f"{s:.2f}s."
+
+            self._update_logs(f"Processing finished in {msg}", False)
+            self._update_progress(100, None)
+            self._running_setter(False)
+
+        self.finished.connect(_on_finished)
 
         # Start the process asynchronously
         self.start(command, args)
@@ -622,7 +650,7 @@ class AppTemplateWidget(QWidget):
         self._update_logs = update_logs
         self._update_progress = update_progress
         self._parameter_node = parameter_node
-        self.process = Process(update_logs, update_progress)
+        self.process = Process(update_logs, update_progress, self.set_running)
 
     def get_work_dir(self) -> Path | None:
         """
@@ -892,12 +920,12 @@ class ChipSelector:
         if self._spinbox.value == len(sel):
             return
         if self._spinbox.value > len(sel):
-            self.add(sorted(list(set(self._availables) - set(sel)))[0])
+            self._add(sorted(list(set(self._availables) - set(sel)))[0])
         else:
             text = sel[-1]
-            self.remove(text)
+            self._remove(text)
 
-    def update(self, availables: list[str]):
+    def update(self, availables: list[str], pre_selected: list[str]):
         self._availables = availables
         self._combo.clear()
         if self._spinbox is not None:
@@ -911,7 +939,12 @@ class ChipSelector:
                 widget.deleteLater()
 
         for name in availables:
-            self.add(name)
+            if name in pre_selected:
+                self._add(name)
+            else:
+                self._combo.addItem(name)
+        if len(self.selected()) == 0 and len(availables) > 0:
+            self._add(availables[0])
 
     def selected(self) -> list[str]:
         """Return currently selected chip texts (in layout order)."""
@@ -922,7 +955,7 @@ class ChipSelector:
                 out.append(w.text)
         return out
 
-    def add(self, text: str) -> None:
+    def _add(self, text: str) -> None:
         """Add a chip (if not already selected) and remove it from combo."""
         if not text or text in self.selected():
             return
@@ -949,7 +982,7 @@ class ChipSelector:
             """
 
         def _remove():
-            self.remove(text)
+            self._remove(text)
 
         btn.clicked.connect(_remove)
         self._layout.insertWidget(self._insert_index_before_spacer(), btn)
@@ -960,7 +993,7 @@ class ChipSelector:
                 self._combo.removeItem(idx)
         self._sync()
 
-    def remove(self, text: str) -> None:
+    def _remove(self, text: str) -> None:
         """Remove a chip (respecting min_selected) and add it back to combo."""
         if not text:
             return
@@ -995,7 +1028,7 @@ class ChipSelector:
 
     def _on_combo_activated(self, index: int) -> None:
         text = self._combo.itemText(index)
-        self.add(text)
+        self._add(text)
 
     def _insert_index_before_spacer(self) -> int:
         insert_index = self._layout.count()
@@ -1013,7 +1046,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
     This widget provides:
       - Input/output volume selection for inference
       - QA capabilities (evaluation with reference, or uncertainty estimation)
-      - Model selection from Hugging Face repositories
+      - App selection from Hugging Face repositories
       - Configuration access for KonfAI Apps (YAML files)
     """
 
@@ -1054,14 +1087,16 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.ui.ttaSpinBox.valueChanged.connect(self.on_tta_changed)
         self.ui.mcDropoutSpinBox.valueChanged.connect(self.on_mc_dropout_changed)
 
-        # Model selection and management
-        self.ui.addModelButton.clicked.connect(self.on_add_model)
-        self.ui.removeModelButton.clicked.connect(self.on_remove_model)
+        # App selection and management
+        self.ui.addAppButton.clicked.connect(self.on_add_app)
+        self.ui.removeAppButton.clicked.connect(self.on_remove_app)
 
         # Configuration button (opens folder containing KonfAI YAML configs)
-        self.ui.configButton.setIcon(QIcon(resource_path("Icons/gear.png")))
-        self.ui.configButton.setIconSize(QSize(18, 18))
         self.ui.configButton.clicked.connect(self.on_open_config)
+
+        self.ui.refreshAppsListButton.setIcon(QIcon(resource_path("Icons/refresh.png")))
+        self.ui.refreshAppsListButton.setIconSize(QSize(18, 18))
+        self.ui.refreshAppsListButton.clicked.connect(self.on_refresh_app)
 
         # Run buttons for inference and QA
         self.ui.runInferenceButton.clicked.connect(self.on_run_inference_button)
@@ -1072,9 +1107,29 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.ui.qaTabWidget.currentChanged.connect(self.on_tab_changed)
 
         self.chip_selector = ChipSelector(
-            self.ui.checkpointsComboBox, self.ui.selectedCheckpointsWidget.layout(), self.ui.ensembleSpinBox, 1
+            self.ui.checkpointsComboBox,
+            self.ui.selectedCheckpointsWidget.layout(),
+            self.ui.ensembleSpinBox,
+            1,
+            on_change=self.on_checkpoint_selected_change,
         )
         self.app_local_repositoy: list[str] = []
+
+    def on_checkpoint_selected_change(self, checkpoints_selected: list[str]):
+        self.set_parameter("checkpoints_name", ",".join(checkpoints_selected))
+
+    def on_refresh_app(self):
+        from konfai.utils.utils import AppRepositoryError
+
+        try:
+            self.populate_apps(True)
+        except AppRepositoryError as e:
+            slicer.util.errorDisplay(
+                "Unable to refresh the list of applications.\n\n"
+                "This may happen if you are offline, if the repository is not accessible, "
+                "The application list has not been updated.",
+                detailedText=getattr(e, "details", None) or str(e),
+            )
 
     def on_tta_changed(self):
         self.set_parameter("number_of_tta", str(self.ui.ttaSpinBox.value))
@@ -1084,17 +1139,17 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
     def set_information(
         self,
-        model: str | None = None,
+        app: str | None = None,
         number_of_ensemble: int | None = None,
         number_of_tta: int | None = None,
         number_of_mc_dropout: int | None = None,
     ) -> None:
         """
-        Update the model information summary panel (model name + ensemble/TTA/MC counts).
+        Update the app information summary panel (app name + ensemble/TTA/MC counts).
 
         When any field is None or not available, a placeholder is displayed.
         """
-        self.ui.modelSummaryValue.setText(f"Model: {model}" if model else "Model: N/A")
+        self.ui.appSummaryValue.setText(f"App: {app}" if app else "App: N/A")
         self.ui.ensembleSummaryValue.setText(f"#{number_of_ensemble}" if number_of_ensemble else "#N/A")
         self.ui.ttaSummaryValue.setText(f"#{number_of_tta}" if number_of_ensemble and number_of_tta else "#N/A")
         self.ui.mcSummaryValue.setText(
@@ -1106,7 +1161,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         Handler called when the evaluation input or stack input selection changes.
 
         It attempts to read metadata from the selected node (or its storage),
-        updates the model information summary, and synchronizes the parameter node.
+        updates the app information summary, and synchronizes the parameter node.
         """
         if node:
             storage = node.GetStorageNode()
@@ -1117,13 +1172,13 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
                     _, attr = get_infos(path)
                     if (
-                        "Model" in attr
+                        "App" in attr
                         and "NumberOfEnsemble" in attr
                         and "NumberOfTTA" in attr
                         and "NumberOfMCDropout" in attr
                     ):
                         self.set_information(
-                            attr["Model"],
+                            attr["App"],
                             attr["NumberOfEnsemble"],
                             attr["NumberOfTTA"],
                             attr["NumberOfMCDropout"],
@@ -1135,7 +1190,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             else:
                 # Fallback: read attributes directly from the node if available
                 self.set_information(
-                    node.GetAttribute("Model"),
+                    node.GetAttribute("App"),
                     node.GetAttribute("NumberOfEnsemble"),
                     node.GetAttribute("NumberOfTTA"),
                     node.GetAttribute("NumberOfMCDropout"),
@@ -1143,10 +1198,10 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.update_parameter_node_from_gui()
 
     def on_remote_server_changed(self):
-        remote_sever, ok = self.get_remote_server()
-        self.populate_models(remote_sever, ok)
+        self.populate_apps()
 
-    def populate_models(self, remote_server: RemoteServer | None, ok: bool):
+    def populate_apps(self, force_update: bool = False) -> None:
+        remote_server, ok = self.get_remote_server()
         from konfai.utils.utils import (
             AppRepositoryError,
             get_app_repository_info,
@@ -1154,58 +1209,63 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             get_available_apps_on_remote_server,
         )
 
-        models_name: list[str] = []
+        apps_name: list[str] = []
         if remote_server is None:
             settings = QSettings()
-            raw = settings.value(f"KonfAI-Settings/{self._name}/Models")
-            models_name = []
+            raw = settings.value(f"KonfAI-Settings/{self._name}/Apps")
+            apps_name = []
             if raw is not None:
-                models_name = json.loads(raw)
+                apps_name = json.loads(raw)
 
-            default_models_name = []
+            default_apps_name = []
+
             for konfai_repo in self._konfai_repo_list:
                 try:
-                    default_models_name += [
-                        konfai_repo + ":" + model_name for model_name in get_available_apps_on_hf_repo(konfai_repo)
+                    default_apps_name += [
+                        konfai_repo + ":" + app_name
+                        for app_name in get_available_apps_on_hf_repo(konfai_repo, force_update)
                     ]
                 except AppRepositoryError as e:
                     slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
-
-            models_name = list(set(default_models_name + models_name))
-            self.app_local_repositoy = models_name
+                    return
+            apps_name = list(set(default_apps_name + apps_name))
+            self.app_local_repositoy = apps_name
         elif ok:
-            models_name = [
+            apps_name = [
                 f"{remote_server.host}:{remote_server.port}:{app_name}|{remote_server.token}"
                 for app_name in get_available_apps_on_remote_server(remote_server)
             ]
 
-        self.ui.modelComboBox.clear()
-        # Populate the model combo box with models found in the provided Hugging Face repos or available app on remote server
-        for model_name in sorted(models_name):
-            try:
-                app_repository = get_app_repository_info(model_name)
-                self.ui.modelComboBox.addItem(app_repository.get_display_name(), app_repository)
-            except Exception as e:
-                slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
-        self.ui.modelComboBox.currentIndexChanged.connect(self.on_model_selected)
+        # Populate the app combo box with apps found in the provided Hugging Face repos or available app on remote server
+        apps = []
+        try:
+            for app_name in sorted(apps_name):
+                apps.append(get_app_repository_info(app_name, force_update))
+        except Exception as e:
+            slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
+            return
+        self.ui.appComboBox.clear()
+        for app in apps:
+            self.ui.appComboBox.addItem(app.get_display_name(), app)
+        self.ui.appComboBox.currentIndexChanged.connect(self.on_app_selected)
 
     def enter(self) -> None:
         """
         Overridden AppTemplateWidget entry point.
 
-        Re-initializes parameter node, GUI state and ensures model selection
+        Re-initializes parameter node, GUI state and ensures app selection
         is consistent when the widget is shown.
         """
-        if self.ui.modelComboBox.count == 0:
-            remote_server, ok = self.get_remote_server()
-            self.populate_models(remote_server, ok)
+        if self.ui.appComboBox.count == 0:
+            self.populate_apps()
+
         super().enter()
-        self.on_model_selected()
+        self.on_app_selected()
 
     def initialize_parameter_node(self) -> None:
         """
         Initialize the parameter node with default values for this app
-        (input volume, model ID, ensemble/TTA/MC-dropout parameters).
+        (input volume, app, ensemble/TTA/MC-dropout parameters).
         """
         self._initialized = False
 
@@ -1215,26 +1275,26 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             if first_volume_node and self._parameter_node is not None:
                 self._parameter_node.SetNodeReferenceID(f"{self._name}/InputVolume", first_volume_node.GetID())
 
-        # Set default model if none is stored yet
-        if not self.get_parameter("Model"):
-            model = self.ui.modelComboBox.itemData(0)
-            if model:
-                self.set_parameter("Model", model.get_name())
+        # Set default app if none is stored yet
+        if not self.get_parameter("App"):
+            app = self.ui.appComboBox.itemData(0)
+            if app:
+                self.set_parameter("App", app.get_name())
 
-        # Determine the current model object from the stored parameter if possible
-        current_model = None
-        for i in range(self.ui.modelComboBox.count):
-            model_tmp = self.ui.modelComboBox.itemData(i)
-            if model_tmp.get_name() == self.get_parameter("Model"):
-                current_model = model_tmp
+        # Determine the current app object from the stored parameter if possible
+        current_app = None
+        for i in range(self.ui.appComboBox.count):
+            app_tmp = self.ui.appComboBox.itemData(i)
+            if app_tmp.get_name() == self.get_parameter("App"):
+                current_app = app_tmp
                 break
-        if current_model is None:
-            current_model = self.ui.modelComboBox.itemData(0)
-        # Ensemble / TTA / MC-dropout defaults based on model capabilities
+        if current_app is None:
+            current_app = self.ui.appComboBox.itemData(0)
+        # Ensemble / TTA / MC-dropout defaults based on app capabilities
         if not self.get_parameter("number_of_tta"):
-            self.set_parameter("number_of_tta", str(current_model.get_maximum_tta()) if current_model else "0")
+            self.set_parameter("number_of_tta", str(current_app.get_maximum_tta()) if current_app else "0")
         if not self.get_parameter("number_of_mc_dropout"):
-            self.set_parameter("number_of_mc_dropout", str(current_model.get_mc_dropout()) if current_model else "0")
+            self.set_parameter("number_of_mc_dropout", str(current_app.get_mc_dropout()) if current_app else "0")
         self.initialize_gui_from_parameter_node()
         self._initialized = True
 
@@ -1242,16 +1302,16 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         """
         Initialize GUI widget values from the parameter node.
         """
-        # Model selection
-        model_param = self.get_parameter("Model")
-        # Search the combo box items for a matching model name
+        # App selection
+        app_param = self.get_parameter("App")
+        # Search the combo box items for a matching app name
         index = -1
-        for i in range(self.ui.modelComboBox.count):
-            model = self.ui.modelComboBox.itemData(i)
-            if model.get_name() == model_param:
+        for i in range(self.ui.appComboBox.count):
+            app = self.ui.appComboBox.itemData(i)
+            if app.get_name() == app_param:
                 index = i
                 break
-        self.ui.modelComboBox.setCurrentIndex(index if index != -1 else 0)
+        self.ui.appComboBox.setCurrentIndex(index if index != -1 else 0)
 
         # Ensemble / TTA / MC-dropout spin boxes
         self.ui.ttaSpinBox.setValue(int(self.get_parameter("number_of_tta")))
@@ -1273,6 +1333,17 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.ui.inputVolumeSequenceSelector.setCurrentNode(self.get_parameter_node("InputVolumeSequence"))
 
     def update_gui_from_parameter_node(self) -> None:
+        # Update run/stop label based on running state
+        if not self.is_running():
+            self.ui.runInferenceButton.text = "Run"
+            self.ui.runEvaluationButton.text = "Run"
+            self.ui.configButton.enabled = True
+        else:
+            self.ui.runInferenceButton.text = "Stop"
+            self.ui.runEvaluationButton.text = "Stop"
+            self.ui.configButton.enabled = False
+            return
+
         """
         Update the GUI state based on the current parameter node values.
 
@@ -1282,22 +1353,14 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         input_volume = self.get_parameter_node("InputVolume")
         if (
             has_node_content(input_volume)
-            and self.ui.modelComboBox.currentData
-            and self.ui.modelComboBox.currentData.get_number_of_models() > 0
+            and self.ui.appComboBox.currentData
+            and self.ui.appComboBox.currentData.get_number_of_models() > 0
         ):
             self.ui.runInferenceButton.toolTip = _("Start inference")
             self.ui.runInferenceButton.enabled = True
         else:
             self.ui.runInferenceButton.toolTip = _("Select input volume")
             self.ui.runInferenceButton.enabled = False
-
-        # Update run/stop label based on running state
-        if not self.is_running():
-            self.ui.runInferenceButton.text = "Run"
-            self.ui.runEvaluationButton.text = "Run"
-        else:
-            self.ui.runInferenceButton.text = "Stop"
-            self.ui.runEvaluationButton.text = "Stop"
 
         reference_volume = self.get_parameter_node("ReferenceVolume")
         input_evaluation_volume = self.get_parameter_node("InputVolumeEvaluation")
@@ -1330,7 +1393,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         Propagate current GUI selection values to the parameter node.
 
         This method should be called whenever a relevant widget changes
-        (volume selectors, model selection, etc.).
+        (volume selectors, app selection, etc.).
         """
         if self._parameter_node is None or not self._initialized:
             return
@@ -1351,48 +1414,62 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         )
         self._parameter_node.EndModify(was_modified)
 
-    def on_model_selected(self) -> None:
+    def on_app_selected(self) -> None:
         """
-        Handle model selection changes.
+        Handle app selection changes.
 
         This method:
           - Resets description expansion
           - Adjusts ensemble / TTA / MC-dropout spin box ranges
-          - Enables/disables QA options depending on model capabilities
+          - Enables/disables QA options depending on app capabilities
         """
-        model = self.ui.modelComboBox.currentData
-        if model is None:
+        app = self.ui.appComboBox.currentData
+        if app is None:
             return
 
-        # Removing model from disk is only relevant for custom (local) models;
-        # by default we disable the button for HF models.
+        # Removing app from disk is only relevant for custom (local) apps;
+        # by default we disable the button for HF apps.
         remote_server, _ = self.get_remote_server()
         if remote_server is not None:
-            self.ui.removeModelButton.setEnabled(False)
-            self.ui.addModelButton.setEnabled(False)
+            self.ui.removeAppButton.setEnabled(False)
+            self.ui.addAppButton.setEnabled(False)
         else:
-            self.ui.removeModelButton.setEnabled(model.get_name().split(":")[0] not in self._konfai_repo_list)
+            self.ui.removeAppButton.setEnabled(app.get_name().split(":")[0] not in self._konfai_repo_list)
+            self.ui.addAppButton.setEnabled(True)
+            self.ui.configButton.setEnabled(True)
+
+        from konfai.utils.utils import LocalAppRepositoryFromDirectory
+
+        if isinstance(app, LocalAppRepositoryFromDirectory):
+            self.ui.configButton.setIcon(QIcon(resource_path("Icons/gear.png")))
+            self.ui.configButton.setIconSize(QSize(18, 18))
+        else:
+            self.ui.configButton.setIcon(QIcon(resource_path("Icons/download.png")))
+            self.ui.configButton.setIconSize(QSize(18, 18))
 
         # Reset description expansion state and update description label
         self._description_expanded = False
         self.on_toggle_description()
 
         # Update ensemble / TTA / MC-dropout limits
+        checkpoints_name_param = self.get_parameter("checkpoints_name")
+        checkpoints_name = []
+        if checkpoints_name_param and isinstance(checkpoints_name_param, str):
+            checkpoints_name = checkpoints_name_param.split(",")
+        self.chip_selector.update(app.get_checkpoints_name(), checkpoints_name)
+        if int(self.get_parameter("number_of_tta")) > app.get_maximum_tta():
+            self.set_parameter("number_of_tta", str(app.get_maximum_tta()))
+        if int(self.get_parameter("number_of_mc_dropout")) > app.get_mc_dropout():
+            self.set_parameter("number_of_mc_dropout", str(app.get_mc_dropout()))
 
-        self.chip_selector.update(model.get_checkpoints_name())
-        if int(self.get_parameter("number_of_tta")) > model.get_maximum_tta():
-            self.set_parameter("number_of_tta", str(model.get_maximum_tta()))
-        if int(self.get_parameter("number_of_mc_dropout")) > model.get_mc_dropout():
-            self.set_parameter("number_of_mc_dropout", str(model.get_mc_dropout()))
+        self.ui.ttaSpinBox.setEnabled(app.get_maximum_tta() > 0)
+        self.ui.ttaSpinBox.setMaximum(app.get_maximum_tta())
 
-        self.ui.ttaSpinBox.setEnabled(model.get_maximum_tta() > 0)
-        self.ui.ttaSpinBox.setMaximum(model.get_maximum_tta())
+        self.ui.mcDropoutSpinBox.setEnabled(app._mc_dropout > 0)
+        self.ui.mcDropoutSpinBox.setMaximum(app._mc_dropout)
 
-        self.ui.mcDropoutSpinBox.setEnabled(model._mc_dropout > 0)
-        self.ui.mcDropoutSpinBox.setMaximum(model._mc_dropout)
-
-        # Enable QA sections based on model capabilities (evaluation/uncertainty support)
-        has_inference, has_evaluation, has_uncertainty = model.has_capabilities()
+        # Enable QA sections based on app capabilities (evaluation/uncertainty support)
+        has_inference, has_evaluation, has_uncertainty = app.has_capabilities()
         self.ui.evaluationCollapsible.setEnabled(has_evaluation or has_uncertainty)
         if not has_evaluation and not has_uncertainty:
             self.ui.evaluationCollapsible.collapsed = True
@@ -1401,41 +1478,41 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.ui.qaTabWidget.setTabEnabled(0, has_evaluation)
         self.ui.qaTabWidget.setTabEnabled(1, has_uncertainty)
 
-        self.set_parameter("Model", model.get_name())
+        self.set_parameter("App", app.get_name())
 
     def on_toggle_description(self) -> None:
         """
-        Toggle between short and full model description text in the UI.
+        Toggle between short and full app description text in the UI.
         """
-        model = self.ui.modelComboBox.currentData
-        if not model:
+        app = self.ui.appComboBox.currentData
+        if not app:
             return
 
         if self._description_expanded:
-            self.ui.modelDescriptionLabel.setText(model.get_description())
+            self.ui.appDescriptionLabel.setText(app.get_description())
             self.ui.toggleDescriptionButton.setText("Less ▲")
         else:
-            self.ui.modelDescriptionLabel.setText(model.get_short_description())
+            self.ui.appDescriptionLabel.setText(app.get_short_description())
             self.ui.toggleDescriptionButton.setText("More ▼")
 
         self._description_expanded = not self._description_expanded
 
-    def on_remove_model(self) -> None:
+    def on_remove_app(self) -> None:
         """
-        Remove the currently selected model from the list, optionally deleting
+        Remove the currently selected app from the list, optionally deleting
         the corresponding directory from disk.
 
-        This is intended for locally added models, not Hugging Face models.
+        This is intended for locally added apps, not Hugging Face apps.
         """
         from konfai.utils.utils import LocalAppRepositoryFromDirectory
 
-        model = self.ui.modelComboBox.currentData
+        app = self.ui.appComboBox.currentData
 
         mb = QMessageBox()
         mb.setIcon(QMessageBox.Warning)
-        mb.setWindowTitle("Remove model?")
-        mb.setText(f"Do you really want to remove “{model.get_display_name()}” from the list?")
-        mb.setInformativeText("This will remove the model entry from the extension’s list.")
+        mb.setWindowTitle("Remove app?")
+        mb.setText(f"Do you really want to remove “{app.get_display_name()}” from the list?")
+        mb.setInformativeText("This will remove the app entry from the extension’s list.")
         mb.setStandardButtons(QMessageBox.Yes | QMessageBox.Cancel)
         mb.setDefaultButton(QMessageBox.Cancel)
 
@@ -1446,19 +1523,19 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         if mb.exec_() != QMessageBox.Yes:
             return
 
-        index = self.ui.modelComboBox.findText(model.get_display_name())
-        self.ui.modelComboBox.removeItem(index)
-        self.app_local_repositoy.remove(model.get_name())
+        index = self.ui.appComboBox.findText(app.get_display_name())
+        self.ui.appComboBox.removeItem(index)
+        self.app_local_repositoy.remove(app.get_name())
 
         if chk.isChecked():
-            if isinstance(model, LocalAppRepositoryFromDirectory):
+            if isinstance(app, LocalAppRepositoryFromDirectory):
                 try:
-                    shutil.rmtree(model.get_name())
+                    shutil.rmtree(app.get_name())
                     QMessageBox.information(
-                        None, "Folder deleted", f"The folder has been successfully deleted:\n{model.get_name()}"
+                        None, "Folder deleted", f"The folder has been successfully deleted:\n{app.get_name()}"
                     )
                 except Exception as e:
-                    QMessageBox.critical(None, "Deletion error", f"Failed to delete folder:\n{model.get_name()}\n\n{e}")
+                    QMessageBox.critical(None, "Deletion error", f"Failed to delete folder:\n{app.get_name()}\n\n{e}")
 
     def on_open_config(self) -> None:
         """
@@ -1466,16 +1543,50 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         The folder is opened in the operating system's default file browser.
         """
-        model = self.ui.modelComboBox.currentData
-        if model is None:
+        app = self.ui.appComboBox.currentData
+        if app is None:
             return
+        from konfai.utils.utils import LocalAppRepositoryFromHF
 
-        config_files = model.download_config_file()
-        QDesktopServices.openUrl(QUrl.fromLocalFile(config_files[0].parent))
+        if isinstance(app, LocalAppRepositoryFromHF):
+            import sys
+            import textwrap
 
-    def on_add_model(self) -> None:
+            pycode = textwrap.dedent(
+                f"""
+                from konfai.utils.utils import get_app_repository_info, MinimalLog
+                from huggingface_hub import hf_hub_download
+                with MinimalLog() as log:
+                    app = get_app_repository_info("{app.get_name()}", True)
+                    app.download_app()
+                    
+            """
+            )
+
+            def on_end_function() -> None:
+                from konfai.utils.utils import get_app_repository_info
+
+                idx = self.ui.appComboBox.currentIndex
+                app = self.ui.appComboBox.currentData
+                app = get_app_repository_info(app.get_name(), False)
+                self.ui.appComboBox.setItemData(idx, app)
+                self.on_app_selected()
+                config_files = app.download_config_file()
+                QDesktopServices.openUrl(QUrl.fromLocalFile(config_files[0].parent))
+
+            self._update_logs("Starting download...", True)
+            self._update_progress(0, "")
+            self.set_running(True)
+            self.ui.runInferenceButton.enabled = True
+            self.ui.runInferenceButton.toolTip = _("Stop download")
+            self.process.run(sys.executable, Path("./").resolve(), ["-c", pycode], on_end_function)
+        else:
+            config_files = app.download_config_file()
+            QDesktopServices.openUrl(QUrl.fromLocalFile(config_files[0].parent))
+
+    def on_add_app(self) -> None:
         """
-        Show a menu to add a new model (from a folder, from Hugging Face, or configure fine-tuning).
+        Show a menu to add a new app (from a folder, from Hugging Face, or configure fine-tuning).
         """
         m = QMenu()
         act_folder = m.addAction("Add from folder…")
@@ -1493,33 +1604,33 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
     def on_add_folder(self) -> None:
         """
-        Add a model located in a local folder to the model list.
+        Add a app located in a local folder to the apps list.
 
-        The folder is expected to contain a valid KonfAI model configuration (YAML + weights).
+        The folder is expected to contain a valid KonfAI app configuration (YAML + weights).
         """
-        from konfai.utils.utils import AppDirectoryError, ModelDirectory
+        from konfai.utils.utils import LocalAppRepositoryFromDirectory
 
-        model_dir = QFileDialog.getExistingDirectory(None, "Select Model Folder", os.path.expanduser("~"))
-        if not model_dir:
+        app_dir = QFileDialog.getExistingDirectory(None, "Select App Folder", os.path.expanduser("~"))
+        if not app_dir:
             return
         try:
-            model = ModelDirectory(Path(model_dir).parent, Path(model_dir).name)
-        except AppDirectoryError as e:
+            app = LocalAppRepositoryFromDirectory(Path(app_dir).parent, Path(app_dir).name)
+        except Exception as e:
             slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
             return
 
         # Ensure uniqueness of display names to avoid confusion in the combo box
-        items = [self.ui.modelComboBox.itemText(i) for i in range(self.ui.modelComboBox.count)]
-        if model.get_display_name() in items:
+        items = [self.ui.appComboBox.itemText(i) for i in range(self.ui.appComboBox.count)]
+        if app.get_display_name() in items:
             QMessageBox.critical(
                 None,
-                "Model already listed",
-                f'The model "{model.get_display_name()}" is already in the list.',
+                "App already listed",
+                f'The app "{app.get_display_name()}" is already in the list.',
             )
             return
-        self.ui.modelComboBox.addItem(model.get_display_name(), model)
-        self.ui.modelComboBox.setCurrentIndex(self.ui.modelComboBox.findData(model))
-        self.app_local_repositoy.append(model.get_name())
+        self.ui.appComboBox.addItem(app.get_display_name(), app)
+        self.ui.appComboBox.setCurrentIndex(self.ui.appComboBox.findData(app))
+        self.app_local_repositoy.append(app.get_name())
 
     def ask_subdir(self, dirs: list[str]) -> str | None:
         """
@@ -1548,13 +1659,13 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
     def on_add_hf(self) -> None:
         """
-        Add a model from a Hugging Face repository.
+        Add a app from a Hugging Face repository.
 
         The user is prompted for a repo id (e.g., 'VBoussot/ImpactSynth') and then
-        a subdirectory (model name) is selected among the available directories.
+        a subdirectory (app name) is selected among the available directories.
         """
         from huggingface_hub import HfApi
-        from konfai.utils.utils import ModelHF
+        from konfai.utils.utils import LocalAppRepositoryFromHF
 
         text = QInputDialog().getText(
             self,
@@ -1580,67 +1691,67 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             QMessageBox.critical(None, "Hugging Face", f"Repository '{repo_id}' does not exist on Hugging Face.")
             return
 
-        # List top-level directories as candidate model names
+        # List top-level directories as candidate app names
         dirs = sorted({path.split("/")[0] for path in files if "/" in path})
-        model_name = self.ask_subdir(dirs)
-        if model_name:
-            from konfai.utils.utils import is_model_repo
+        app_name = self.ask_subdir(dirs)
+        if app_name:
+            from konfai.utils.utils import is_app_repo
 
-            state, error, _ = is_model_repo(repo_id, model_name)
+            state, error, _ = is_app_repo(repo_id, app_name)
             if not state:
-                QMessageBox.critical(None, "Model", error)
+                QMessageBox.critical(None, "App", error)
                 return
 
-            model = ModelHF(repo_id, model_name)
+            app = LocalAppRepositoryFromHF(repo_id, app_name)
 
             # Do not add duplicate display names
-            items = [self.ui.modelComboBox.itemText(i) for i in range(self.ui.modelComboBox.count)]
-            if model.get_display_name() in items:
+            items = [self.ui.appComboBox.itemText(i) for i in range(self.ui.appComboBox.count)]
+            if app.get_display_name() in items:
                 QMessageBox.critical(
                     None,
-                    "Model already listed",
-                    f'The model "{model.get_display_name()}" is already in the list.',
+                    "App already listed",
+                    f'The app "{app.get_display_name()}" is already in the list.',
                 )
                 return
 
-            self.ui.modelComboBox.addItem(model.get_display_name(), model)
-            self.ui.modelComboBox.setCurrentIndex(self.ui.modelComboBox.findData(model))
-            self.app_local_repositoy.append(model.get_name())
+            self.ui.appComboBox.addItem(app.get_display_name(), app)
+            self.ui.appComboBox.setCurrentIndex(self.ui.appComboBox.findData(app))
+            self.app_local_repositoy.append(app.get_name())
 
     def on_add_ft(self) -> None:
         """
-        Create a new folder intended for fine-tuning a model and add it to the list.
+        Create a new folder intended for fine-tuning a app and add it to the list.
 
         This helper guides the user through selecting a parent directory,
-        naming the fine-tune model folder and creating a basic skeleton with a README.
+        naming the fine-tune app folder and creating a basic skeleton with a README.
         """
-        from konfai.utils.utils import ModelDirectory
+        from konfai.utils.utils import LocalAppRepository
 
-        model = self.ui.modelComboBox.currentData
-        if model is None:
+        app = self.ui.appComboBox.currentData
+        if app is None:
             return
 
-        # Choose the parent directory for the new model
-        parent_dir = QFileDialog.getExistingDirectory(None, "Choose parent directory for the new model")
+        # Choose the parent directory for the new app
+        parent_dir = QFileDialog.getExistingDirectory(None, "Choose parent directory for the new app")
         if not parent_dir:
             return
 
-        # Ask for the new model name
-        name = QInputDialog.getText(None, "Fine tune", "New model name (folder will be created):")
+        # Ask for the new app name
+        name = QInputDialog.getText(None, "Fine tune", "New app name (folder will be created):")
         if not name.strip():
             return
 
-        # Ask for the new model diplay name
-        display_name = QInputDialog.getText(None, "Fine tune", "New diplay model name:")
+        # Ask for the new app diplay name
+        display_name = QInputDialog.getText(None, "Fine tune", "New diplay app name:")
         if not display_name.strip():
             return
 
-        items = [self.ui.modelComboBox.itemText(i) for i in range(self.ui.modelComboBox.count)]
+        items = [self.ui.appComboBox.itemText(i) for i in range(self.ui.appComboBox.count)]
         if display_name in items:
             QMessageBox.critical(
                 None,
-                "Model already listed",
-                f'The model "{display_name}" is already in the list.',
+                "App already listed",
+                f'The app "{display_name}" is already in the list.',
             )
             return
 
@@ -1656,12 +1767,12 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             QMessageBox.warning(None, "Invalid name", "Please enter a valid name.")
             return
 
-        model.install_fine_tune("Config.yml", Path(parent_dir) / name, display_name, epochs, it_validation)
-        # Add the folder to the model combo box
-        model_ft = ModelDirectory(Path(parent_dir), name)
-        self.ui.modelComboBox.addItem(model_ft.get_display_name(), model_ft)
-        self.ui.modelComboBox.setCurrentIndex(self.ui.modelComboBox.findData(model_ft))
-        self.app_local_repositoy.append(model_ft.get_name())
+        app.install_fine_tune("Config.yml", Path(parent_dir) / name, display_name, epochs, it_validation)
+        # Add the folder to the app combo box
+        app_ft = LocalAppRepository(Path(parent_dir), name)
+        self.ui.appComboBox.addItem(app_ft.get_display_name(), app_ft)
+        self.ui.appComboBox.setCurrentIndex(self.ui.appComboBox.findData(app_ft))
+        self.app_local_repositoy.append(app_ft.get_name())
 
     def on_tab_changed(self) -> None:
         """
@@ -1693,13 +1804,13 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         settings = QSettings()
         if len(self.app_local_repositoy) > 0:
             settings.setValue(
-                f"KonfAI-Settings/{self._name}/Models",
+                f"KonfAI-Settings/{self._name}/Apps",
                 json.dumps(self.app_local_repositoy),
             )
 
     def evaluation(self, remote_server: RemoteServer, devices: list[str]) -> None:
         """
-        Run reference-based evaluation using the selected model.
+        Run reference-based evaluation using the selected app.
 
         Steps:
           - Resample input volume and optional mask to the reference volume space
@@ -1750,12 +1861,12 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         volume_storage_node.WriteData(reference_volume_evaluation_node)
         volume_storage_node.UnRegister(None)
 
-        model = self.ui.modelComboBox.currentData
+        app = self.ui.appComboBox.currentData
 
         # Build konfai-apps evaluation CLI arguments
         args = [
             "eval",
-            model.get_name(),
+            app.get_name(),
             "-i",
             "Volume.mha",
             "--gt",
@@ -1804,11 +1915,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             It loads metrics and images produced by konfai-apps and updates
             the evaluation panel accordingly.
             """
-            if self.process.exitStatus() != QProcess.NormalExit:
-                self.set_running(False)
-                return
             if not any((self._work_dir / "Evaluation").rglob("*.json")):
-                self.set_running(False)
                 return
 
             # Read the first JSON metrics file found in the Evaluation directory
@@ -1819,28 +1926,25 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
             # Populate the image list with all .mha images in the Evaluation folder
             self.evaluation_panel.refresh_images_list(Path(next((self._work_dir / "Evaluation").rglob("*.mha")).parent))
-            self._update_logs("Processing finished.")
-            self._update_progress(100)
-            self.set_running(False)
 
         self.process.run("konfai-apps", self._work_dir, args, on_end_function)
 
     def uncertainty(self, remote_server: RemoteServer | None, devices: list[str]) -> None:
         """
-        Run uncertainty analysis using the selected model.
+        Run uncertainty analysis using the selected app.
 
         Steps:
           - Export the inference stack from Slicer to an MHA file
-          - Call `konfai-apps uncertainty` with the selected model
+          - Call `konfai-apps uncertainty` with the selected app
           - Read resulting JSON metrics and uncertainty maps and display them
         """
         # Clear previous metrics and images in both panels
         self.uncertainty_panel.clear_metrics()
 
-        model = self.ui.modelComboBox.currentData
+        app = self.ui.appComboBox.currentData
         args = [
             "uncertainty",
-            model.get_name(),
+            app.get_name(),
             "-i",
             "Volume.mha",
             "-o",
@@ -1875,12 +1979,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             It loads metrics and MHA images produced by konfai-apps and updates
             the uncertainty panel accordingly.
             """
-            if self.process.exitStatus() != QProcess.NormalExit:
-                self.set_running(False)
-                return
-
             if not any((self._work_dir / "Uncertainty").rglob("*.json")):
-                self.set_running(False)
                 return
 
             from konfai.evaluator import Statistics
@@ -1890,15 +1989,12 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             self.uncertainty_panel.refresh_images_list(
                 Path(next((self._work_dir / "Uncertainty").rglob("*.mha")).parent)
             )
-            self._update_logs("Processing finished.")
-            self._update_progress(100)
-            self.set_running(False)
 
         self.process.run("konfai-apps", self._work_dir, args, on_end_function)
 
     def inference(self, remote_server: RemoteServer | None, devices: list[str]) -> None:
         """
-        Run inference using the selected KonfAI model.
+        Run inference using the selected KonfAI app.
 
         Steps:
           - Export the input volume to an MHA file with appropriate metadata
@@ -1912,10 +2008,10 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.evaluation_panel.clear_metrics()
         self.uncertainty_panel.clear_metrics()
 
-        model = self.ui.modelComboBox.currentData
+        app = self.ui.appComboBox.currentData
         args = [
             "infer",
-            model.get_name(),
+            app.get_name(),
             "-i",
             "Volume.mha",
             "-o",
@@ -1944,8 +2040,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         # Store KonfAI metadata in the MHA header
         sitk_image.SetMetaData(
-            "Model",
-            model.get_name(),
+            "App",
+            app.get_name(),
         )
         sitk_image.SetMetaData("NumberOfEnsemble", f"{self.ui.ensembleSpinBox.value}")
         sitk_image.SetMetaData("NumberOfTTA", f"{self.ui.ttaSpinBox.value}")
@@ -1963,10 +2059,6 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             appropriate volume class (scalar vs labelmap), copies orientation and
             attributes, and configures slice viewer overlays.
             """
-            if self.process.exitStatus() != QProcess.NormalExit:
-                self.set_running(False)
-                return
-
             data = None
             # Find the first non-stack MHA output file
             for file in (self._work_dir / "Output").rglob("*.mha"):
@@ -1976,7 +2068,6 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                     data, attr = image_to_data(sitk.ReadImage(str(file)))
                     break
             if data is None:
-                self.set_running(False)
                 return
 
             self._update_logs("Loading result into Slicer...")
@@ -1987,7 +2078,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             base_name = (
                 self.ui.outputVolumeSelector.baseName
                 + "_"
-                + model.get_name()
+                + app.get_name()
                 + ("_Segmentation" if want_label else "_Output")
             )
 
@@ -2001,7 +2092,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                 node.CreateDefaultDisplayNodes()
 
                 slicer.modules.segmentations.logic().ImportLabelmapToSegmentationNode(tmp_labelmap, node)
-                label_value_to_segment_name = model.get_terminology()
+                label_value_to_segment_name = app.get_terminology()
                 segmentation = node.GetSegmentation()
                 for label_value, segment_id in zip(np.unique(data[0])[1:], range(segmentation.GetNumberOfSegments())):
                     segment = segmentation.GetNthSegment(segment_id)
@@ -2069,10 +2160,6 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                     for key, value in attr.items():
                         sequence_node.SetAttribute(key.split("_")[0], str(value))
                     break
-
-            self._update_logs("Processing finished.")
-            self._update_progress(100)
-            self.set_running(False)
 
         self.process.run("konfai-apps", self._work_dir, args, on_end_function)
 
@@ -2635,7 +2722,7 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         else:
             self.ui.logText.appendPlainText(text)
 
-    def update_progress(self, value: int, speed: float | None = None) -> None:
+    def update_progress(self, value: int, speed: str | None = None) -> None:
         """
         Update the progress bar and speed label.
 
@@ -2708,7 +2795,7 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
                 index = self.ui.remoteServerComboBox.findText(remote_server.split("|")[0])
 
         if index == -1:
-            index = self.ui.remoteServerComboBox.count - 1
+            index = 0
         if self.ui.remoteServerComboBox.currentIndex != index or is_first:
             self.ui.remoteServerComboBox.setCurrentIndex(index)
             if index == 0:

@@ -44,18 +44,18 @@
                                           </property>
                                        </widget>
                                     </item>
-                                    <!-- Model row -->
+                                    <!-- App row -->
                                     <item row="1" column="0">
-                                       <widget class="QLabel" name="label_model">
+                                       <widget class="QLabel" name="label_app">
                                           <property name="text">
                                              <string>KonfAI App</string>
                                           </property>
                                        </widget>
                                     </item>
                                     <item row="1" column="1">
-                                       <layout class="QHBoxLayout" name="hLayout_model">
+                                       <layout class="QHBoxLayout" name="hLayout_app">
                                           <item>
-                                             <widget class="QComboBox" name="modelComboBox">
+                                             <widget class="QComboBox" name="appComboBox">
                                                 <property name="toolTip">
                                                    <string>Choose KonfAI app</string>
                                                 </property>
@@ -64,7 +64,7 @@
                                           <item>
                                              <widget class="QPushButton" name="configButton">
                                                 <property name="toolTip">
-                                                   <string>Open KonfAI app config folder</string>
+                                                   <string>Download KonfAI app</string>
                                                 </property>
                                                 <property name="iconSize">
                                                    <size>
@@ -96,7 +96,7 @@
                                              </widget>
                                           </item>
                                           <item>
-                                             <widget class="QPushButton" name="removeModelButton">
+                                             <widget class="QPushButton" name="removeAppButton">
                                                 <property name="toolTip">
                                                    <string>Remove KonfAI app</string>
                                                 </property>
@@ -136,7 +136,7 @@
                                              </widget>
                                           </item>
                                           <item>
-                                             <widget class="QPushButton" name="addModelButton">
+                                             <widget class="QPushButton" name="addAppButton">
                                                 <property name="toolTip">
                                                    <string>Add KonfAI app</string>
                                                 </property>
@@ -145,6 +145,40 @@
                                                       <normaloff>:/Icons/plus.png</normaloff>
                                                       :/Icons/plus.png
                                                    </iconset>
+                                                </property>
+                                                <property name="iconSize">
+                                                   <size>
+                                                      <width>16</width>
+                                                      <height>16</height>
+                                                   </size>
+                                                </property>
+                                                <property name="flat">
+                                                   <bool>true</bool>
+                                                </property>
+                                                <property name="text">
+                                                   <string />
+                                                </property>
+                                                <property name="maximumSize">
+                                                   <size>
+                                                      <width>24</width>
+                                                      <height>24</height>
+                                                   </size>
+                                                </property>
+                                                <property name="minimumSize">
+                                                   <size>
+                                                      <width>24</width>
+                                                      <height>24</height>
+                                                   </size>
+                                                </property>
+                                                <property name="styleSheet">
+                                                   <string notr="true">padding:0px; margin:0px;</string>
+                                                </property>
+                                             </widget>
+                                          </item>
+                                          <item>
+                                             <widget class="QPushButton" name="refreshAppsListButton">
+                                                <property name="toolTip">
+                                                   <string>Refresh KonfAI list</string>
                                                 </property>
                                                 <property name="iconSize">
                                                    <size>
@@ -196,7 +230,7 @@
                                              <number>0</number>
                                           </property>
                                           <item>
-                                             <widget class="QLabel" name="modelDescriptionLabel">
+                                             <widget class="QLabel" name="appDescriptionLabel">
                                                 <property name="wordWrap">
                                                    <bool>true</bool>
                                                 </property>
@@ -696,14 +730,14 @@
                            </spacer>
                         </item>
                         <item>
-                           <widget class="QFrame" name="modelSummaryFrame">
+                           <widget class="QFrame" name="appSummaryFrame">
                               <property name="frameShape">
                                  <enum>QFrame::StyledPanel</enum>
                               </property>
                               <property name="frameShadow">
                                  <enum>QFrame::Raised</enum>
                               </property>
-                              <layout class="QHBoxLayout" name="modelSummaryLayout">
+                              <layout class="QHBoxLayout" name="appSummaryLayout">
                                  <property name="leftMargin">
                                     <number>8</number>
                                  </property>
@@ -720,9 +754,9 @@
                                     <number>6</number>
                                  </property>
                                  <item>
-                                    <widget class="QLabel" name="modelSummaryLabel">
+                                    <widget class="QLabel" name="appSummaryLabel">
                                        <property name="text">
-                                          <string>Model:</string>
+                                          <string>App:</string>
                                        </property>
                                        <property name="styleSheet">
                                           <string>color: #666;</string>
@@ -730,7 +764,7 @@
                                     </widget>
                                  </item>
                                  <item>
-                                    <widget class="QLabel" name="modelSummaryValue">
+                                    <widget class="QLabel" name="appSummaryValue">
                                        <property name="text">
                                           <string>N/A</string>
                                        </property>
