@@ -181,7 +181,6 @@ def install_konfai() -> bool:
             return False
         with slicer_wait_popup("KonfAI dependency install", "Installing KonfAI..."):
             slicer.util.pip_install("konfai")
-            slicer.util.pip_install(f"keyring")
         return True
 
     if installed is None:
@@ -193,7 +192,6 @@ def install_konfai() -> bool:
             return False
         with slicer_wait_popup("KonfAI dependency install", f"Installing KonfAI {latest}..."):
             slicer.util.pip_install(f"konfai=={latest}")
-            slicer.util.pip_install(f"keyring")
 
         return True
 
@@ -230,7 +228,7 @@ def install_konfai() -> bool:
 
                 slicer.util.pip_install(f"--upgrade --force-reinstall --no-deps konfai=={latest}")
                 slicer.util.pip_install(
-                    "tqdm numpy ruamel.yaml psutil tensorboard " "lxml h5py nvidia-ml-py requests huggingface_hub"
+                    "tqdm numpy ruamel.yaml psutil tensorboard lxml h5py nvidia-ml-py requests huggingface_hub"
                 )
             try:
                 konfai.assert_konfai_install()
@@ -592,6 +590,10 @@ class RemoteServer:
         self.name = name
         self.host = host
         self.port = port
+        try:
+            import keyring
+        except ImportError:
+            slicer.util.pip_install("keyring")
         import keyring
 
         self.token = keyring.get_password(SERVICE, str(self))
@@ -2237,6 +2239,10 @@ class RemoteServerConfigDialog(QDialog):
         self.remote_server.host = self.hostEdit.text.strip()
         self.remote_server.port = int(self.portSpin.value)
         self.remote_server.token = self.tokenEdit.text.strip()
+        try:
+            import keyring
+        except ImportError:
+            slicer.util.pip_install("keyring")
         import keyring
 
         keyring.set_password(SERVICE, str(self.remote_server), self.remote_server.token)
@@ -2316,6 +2322,10 @@ class RemoteServerAddDialog(QDialog):
 
         token = self.tokenEdit.text.strip() or None
         id = f"{name}|{host}|{port}"
+        try:
+            import keyring
+        except ImportError:
+            slicer.util.pip_install("keyring")
         import keyring
 
         if token:
