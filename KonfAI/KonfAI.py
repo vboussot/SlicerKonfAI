@@ -29,7 +29,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
 
-import keyring
 import numpy as np
 import SimpleITK as sitk  # noqa: N813
 import sitkUtils
@@ -182,6 +181,7 @@ def install_konfai() -> bool:
             return False
         with slicer_wait_popup("KonfAI dependency install", "Installing KonfAI..."):
             slicer.util.pip_install("konfai")
+            slicer.util.pip_install(f"keyring")
         return True
 
     if installed is None:
@@ -194,6 +194,7 @@ def install_konfai() -> bool:
         with slicer_wait_popup("KonfAI dependency install", f"Installing KonfAI {latest}..."):
             slicer.util.pip_install(f"konfai=={latest}")
             slicer.util.pip_install(f"keyring")
+
         return True
 
     if installed != latest:
@@ -591,6 +592,8 @@ class RemoteServer:
         self.name = name
         self.host = host
         self.port = port
+        import keyring
+
         self.token = keyring.get_password(SERVICE, str(self))
         self.timeout = 3
 
@@ -2234,6 +2237,8 @@ class RemoteServerConfigDialog(QDialog):
         self.remote_server.host = self.hostEdit.text.strip()
         self.remote_server.port = int(self.portSpin.value)
         self.remote_server.token = self.tokenEdit.text.strip()
+        import keyring
+
         keyring.set_password(SERVICE, str(self.remote_server), self.remote_server.token)
         return self.remote_server
 
@@ -2311,6 +2316,8 @@ class RemoteServerAddDialog(QDialog):
 
         token = self.tokenEdit.text.strip() or None
         id = f"{name}|{host}|{port}"
+        import keyring
+
         if token:
             keyring.set_password(SERVICE, id, token)
         else:
