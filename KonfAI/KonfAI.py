@@ -1110,6 +1110,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         # Description toggle and QA tab changes
         self.ui.toggleDescriptionButton.clicked.connect(self.on_toggle_description)
         self.ui.qaTabWidget.currentChanged.connect(self.on_tab_changed)
+        self.ui.appComboBox.currentIndexChanged.connect(self.on_app_selected)
 
         self.chip_selector = ChipSelector(
             self.ui.checkpointsComboBox,
@@ -1252,7 +1253,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.ui.appComboBox.clear()
         for app in apps:
             self.ui.appComboBox.addItem(app.get_display_name(), app)
-        self.ui.appComboBox.currentIndexChanged.connect(self.on_app_selected)
+        
 
     def enter(self) -> None:
         """
@@ -1359,7 +1360,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         if (
             has_node_content(input_volume)
             and self.ui.appComboBox.currentData
-            and self.ui.appComboBox.currentData.get_number_of_models() > 0
+            and len(self.ui.appComboBox.currentData.get_checkpoints_name()) > 0
         ):
             self.ui.runInferenceButton.toolTip = _("Start inference")
             self.ui.runInferenceButton.enabled = True
@@ -1431,7 +1432,6 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         app = self.ui.appComboBox.currentData
         if app is None:
             return
-
         # Removing app from disk is only relevant for custom (local) apps;
         # by default we disable the button for HF apps.
         remote_server, _ = self.get_remote_server()
@@ -1730,7 +1730,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         This helper guides the user through selecting a parent directory,
         naming the fine-tune app folder and creating a basic skeleton with a README.
         """
-        from konfai.utils.utils import LocalAppRepository
+        from konfai.utils.utils import LocalAppRepositoryFromDirectory
 
         app = self.ui.appComboBox.currentData
         if app is None:
@@ -1774,7 +1774,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         app.install_fine_tune("Config.yml", Path(parent_dir) / name, display_name, epochs, it_validation)
         # Add the folder to the app combo box
-        app_ft = LocalAppRepository(Path(parent_dir), name)
+        app_ft = LocalAppRepositoryFromDirectory(Path(parent_dir), name)
         self.ui.appComboBox.addItem(app_ft.get_display_name(), app_ft)
         self.ui.appComboBox.setCurrentIndex(self.ui.appComboBox.findData(app_ft))
         self.app_local_repositoy.append(app_ft.get_name())
@@ -2103,13 +2103,21 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                     segment = segmentation.GetNthSegment(segment_id)
                     label_value = int(label_value)
 
-                    random.seed(label_value)
-                    segment.SetColor(random.random(), random.random(), random.random())
-
-                    # Si la valeur existe dans ton mapping
+                    
                     if label_value in label_value_to_segment_name:
-                        segment_name = label_value_to_segment_name[label_value]
-                        segment.SetName(segment_name)
+                        segment.SetName(label_value_to_segment_name[label_value].name)
+
+                        def hex_to_rgb01(hex_color: str) -> tuple[float, float, float]:
+                            hex_color = hex_color.lstrip("#")
+                            r = int(hex_color[0:2], 16) / 255.0
+                            g = int(hex_color[2:4], 16) / 255.0
+                            b = int(hex_color[4:6], 16) / 255.0
+                            return r, g, b
+                        r, g, b = hex_to_rgb01(label_value_to_segment_name[label_value].color)
+                        segment.SetColor(r, g, b)
+                    else:
+                        random.seed(label_value)
+                        segment.SetColor(random.random(), random.random(), random.random())
 
                 slicer.mrmlScene.RemoveNode(tmp_labelmap)
                 segmentation_node_to_labelmap(node)

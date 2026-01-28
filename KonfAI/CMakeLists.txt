@@ -11,9 +11,11 @@ set(MODULE_PYTHON_RESOURCES
   Resources/UI/${MODULE_NAME}AppTemplate.ui
   Resources/UI/${MODULE_NAME}MetricsPanel.ui
   
-  Resources/Icons/${MODULE_NAME}.png
-  Resources/Icons/gear.png
+  Resources/Icons/download.png
   Resources/Icons/folder.png
+  Resources/Icons/gear.png
+  Resources/Icons/${MODULE_NAME}.png
+  Resources/Icons/refresh.png
   )
 
 #-----------------------------------------------------------------------------
