@@ -36,9 +36,11 @@ import slicer
 import vtk
 from qt import (
     QCheckBox,
+    QColor,
     QCursor,
     QDesktopServices,
     QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFont,
     QFormLayout,
@@ -47,6 +49,7 @@ from qt import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
     QListWidgetItem,
     QMenu,
     QMessageBox,
@@ -611,6 +614,50 @@ class RemoteServer:
         return f"http://{self.host}:{self.port}"
 
 
+class DownloadFilesDialog(QDialog):
+    def __init__(self, files: list[str], checkpoints_name_available: list[str]):
+        super().__init__()
+        self.setWindowTitle("Download from Hugging Face")
+        self.setModal(True)
+        self.resize(600, 450)
+
+        self.label = QLabel("Select files to download:")
+        self.listw = QListWidget()
+        self.listw.setSelectionMode(QListWidget.MultiSelection)
+
+        for f in files:
+            item = QListWidgetItem(f)
+
+            if f.endswith(".pt") and f not in checkpoints_name_available:
+                item.setForeground(QColor("#9ca3af"))
+                font = item.font()
+                font.setItalic(True)
+                item.setFont(font)
+                item.setData(Qt.UserRole, "shadow")
+
+            self.listw.addItem(item)
+
+        # boutons (même style que ton exemple)
+        self.downloadButton = QPushButton("Download")
+        self.cancelButton = QPushButton("Cancel")
+
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        btns.addWidget(self.downloadButton)
+        btns.addWidget(self.cancelButton)
+
+        root = QVBoxLayout(self)
+        root.addWidget(self.label)
+        root.addWidget(self.listw)
+        root.addLayout(btns)
+
+        self.downloadButton.clicked.connect(lambda _=False: self.accept())
+        self.cancelButton.clicked.connect(lambda _=False: self.reject())
+
+    def selected_files(self) -> list[str]:
+        return [i.text() for i in self.listw.selectedItems()]
+
+
 class AppTemplateWidget(QWidget):
     """
     Abstract base widget for a KonfAI application panel.
@@ -918,23 +965,25 @@ class ChipSelector:
         if self._spinbox is not None:
             self._spinbox.setMinimum(self._min_selected)
             self._spinbox.valueChanged.connect(self._on_spinbox_changed)
-        self._availables: list[str] = []
+        self._all_items: list[str] = []
+        self._available_items: list[str] = []
 
     def _on_spinbox_changed(self):
         sel = self.selected()
         if self._spinbox.value == len(sel):
             return
         if self._spinbox.value > len(sel):
-            self._add(sorted(list(set(self._availables) - set(sel)))[0])
+            self._add(sorted(list(set(self._all_items) - set(sel)))[0])
         else:
             text = sel[-1]
             self._remove(text)
 
-    def update(self, availables: list[str], pre_selected: list[str]):
-        self._availables = availables
+    def update(self, availables_item: list[str], all_items: list[str], pre_selected: list[str]):
+        self._all_items = all_items
+        self._available_items = availables_item
         self._combo.clear()
         if self._spinbox is not None:
-            self._spinbox.setMaximum(len(availables))
+            self._spinbox.setMaximum(len(all_items))
         for i in reversed(range(self._layout.count())):
             item = self._layout.itemAt(i)
             widget = item.widget()
@@ -943,13 +992,13 @@ class ChipSelector:
                 self._layout.removeWidget(widget)
                 widget.deleteLater()
 
-        for name in availables:
+        for name in all_items:
             if name in pre_selected:
                 self._add(name)
             else:
                 self._combo.addItem(name)
-        if len(self.selected()) == 0 and len(availables) > 0:
-            self._add(availables[0])
+        if len(self.selected()) == 0 and len(all_items) > 0:
+            self._add(all_items[0])
 
     def selected(self) -> list[str]:
         """Return currently selected chip texts (in layout order)."""
@@ -971,7 +1020,10 @@ class ChipSelector:
         btn.minimumHeight = 20
         btn.maximumHeight = 24
 
-        btn.styleSheet = """
+        shadow = text not in self._available_items
+        btn.setProperty("shadow", "1" if shadow else "0")
+        btn.setStyleSheet(
+            """
             QPushButton {
                 color: #0b3d91;
                 background-color: #edf3ff;
@@ -980,11 +1032,18 @@ class ChipSelector:
                 padding: 3px 10px;
                 font-weight: 600;
             }
+            QPushButton:hover { background-color: #dce8ff; }
 
-            QPushButton:hover {
-                background-color: #dce8ff;
+            QPushButton[shadow="1"] {
+                color: #6b7280;
+                background-color: #f3f4f6;
+                border: 1px solid #d1d5db;
+                font-weight: 500;
             }
+            QPushButton[shadow="1"]:hover { background-color: #e5e7eb; }
+            QPushButton[shadow="1"]:pressed { background-color: #e5e7eb; }
             """
+        )
 
         def _remove():
             self._remove(text)
@@ -1246,14 +1305,24 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         apps = []
         try:
             for app_name in sorted(apps_name):
-                apps.append(get_app_repository_info(app_name, force_update))
+                apps.append(get_app_repository_info(app_name, False))
         except Exception as e:
             slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
             return
+
+        was_blocked = self.ui.appComboBox.blockSignals(True)
         self.ui.appComboBox.clear()
         for app in apps:
             self.ui.appComboBox.addItem(app.get_display_name(), app)
-        
+        self.ui.appComboBox.blockSignals(was_blocked)
+        app_param = self.get_parameter("App")
+        index = 0
+        for i in range(self.ui.appComboBox.count):
+            app = self.ui.appComboBox.itemData(i)
+            if app.get_name() == app_param:
+                index = i
+                break
+        self.ui.appComboBox.setCurrentIndex(index)
 
     def enter(self) -> None:
         """
@@ -1432,6 +1501,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         app = self.ui.appComboBox.currentData
         if app is None:
             return
+
         # Removing app from disk is only relevant for custom (local) apps;
         # by default we disable the button for HF apps.
         remote_server, _ = self.get_remote_server()
@@ -1448,10 +1518,11 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         if isinstance(app, LocalAppRepositoryFromDirectory):
             self.ui.configButton.setIcon(QIcon(resource_path("Icons/gear.png")))
             self.ui.configButton.setIconSize(QSize(18, 18))
+            self.ui.configButton.toolTip = "Open KonfAi app config folder"
         else:
             self.ui.configButton.setIcon(QIcon(resource_path("Icons/download.png")))
             self.ui.configButton.setIconSize(QSize(18, 18))
-
+            self.ui.configButton.toolTip = "Download KonfAi app"
         # Reset description expansion state and update description label
         self._description_expanded = False
         self.on_toggle_description()
@@ -1461,10 +1532,13 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         checkpoints_name = []
         if checkpoints_name_param and isinstance(checkpoints_name_param, str):
             checkpoints_name = checkpoints_name_param.split(",")
-        self.chip_selector.update(app.get_checkpoints_name(), checkpoints_name)
-        if int(self.get_parameter("number_of_tta")) > app.get_maximum_tta():
+        self.chip_selector.update(app.get_checkpoints_name_available(), app.get_checkpoints_name(), checkpoints_name)
+        if not self.get_parameter("number_of_tta") or int(self.get_parameter("number_of_tta")) > app.get_maximum_tta():
             self.set_parameter("number_of_tta", str(app.get_maximum_tta()))
-        if int(self.get_parameter("number_of_mc_dropout")) > app.get_mc_dropout():
+        if (
+            not self.get_parameter("number_of_mc_dropout")
+            or int(self.get_parameter("number_of_mc_dropout")) > app.get_mc_dropout()
+        ):
             self.set_parameter("number_of_mc_dropout", str(app.get_mc_dropout()))
 
         self.ui.ttaSpinBox.setEnabled(app.get_maximum_tta() > 0)
@@ -1554,18 +1628,30 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         from konfai.utils.utils import LocalAppRepositoryFromHF
 
         if isinstance(app, LocalAppRepositoryFromHF):
+            filenames = LocalAppRepositoryFromHF.get_filenames(app._repo_id, app._app_name, True)
+            dlg = DownloadFilesDialog(filenames, app.get_checkpoints_name_available())
+            if dlg.exec() != dlg.Accepted:
+                return
+            selected_files = dlg.selected_files()
+            if not selected_files:
+                return
+
             import sys
             import textwrap
 
             pycode = textwrap.dedent(
                 f"""
-                from konfai.utils.utils import get_app_repository_info, MinimalLog
-                from huggingface_hub import hf_hub_download
+                from konfai.utils.utils import LocalAppRepositoryFromHF, MinimalLog
                 with MinimalLog() as log:
-                    app = get_app_repository_info("{app.get_name()}", True)
-                    app.download_app()
-                    
-            """
+                    filenames = {selected_files!r}
+                    for filename in filenames:
+                        LocalAppRepositoryFromHF.download(
+                            "{app._repo_id}",
+                            "{app._app_name}" + "/" + filename,
+                            True,
+                        )
+                        print(f"[KonfAI-Apps] {{filename}} is ready.")
+                """
             )
 
             def on_end_function() -> None:
@@ -1576,8 +1662,6 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                 app = get_app_repository_info(app.get_name(), False)
                 self.ui.appComboBox.setItemData(idx, app)
                 self.on_app_selected()
-                config_files = app.download_config_file()
-                QDesktopServices.openUrl(QUrl.fromLocalFile(config_files[0].parent))
 
             self._update_logs("Starting download...", True)
             self._update_progress(0, "")
@@ -2103,7 +2187,6 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                     segment = segmentation.GetNthSegment(segment_id)
                     label_value = int(label_value)
 
-                    
                     if label_value in label_value_to_segment_name:
                         segment.SetName(label_value_to_segment_name[label_value].name)
 
@@ -2113,6 +2196,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                             g = int(hex_color[2:4], 16) / 255.0
                             b = int(hex_color[4:6], 16) / 255.0
                             return r, g, b
+
                         r, g, b = hex_to_rgb01(label_value_to_segment_name[label_value].color)
                         segment.SetColor(r, g, b)
                     else:
