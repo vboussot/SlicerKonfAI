@@ -243,20 +243,6 @@ def install_konfai() -> bool:
     return True
 
 
-def segmentation_node_to_labelmap(node):
-    labelmap_node = node
-    if node and node.IsA("vtkMRMLSegmentationNode"):
-        seg_node = node
-
-        labelmap_node = slicer.mrmlScene.AddNewNodeByClass(
-            "vtkMRMLLabelMapVolumeNode", seg_node.GetName() + "_labelmap"
-        )
-
-        slicer.modules.segmentations.logic().ExportAllSegmentsToLabelmapNode(seg_node, labelmap_node)
-
-    return labelmap_node
-
-
 def has_node_content(node) -> bool:
     if not node:
         return False
@@ -1921,10 +1907,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             self.ui.inputVolumeEvaluationSelector.currentNode().GetName() + "_toRef",
         )
 
-        input_volume_evaluation_node = segmentation_node_to_labelmap(
-            self.ui.inputVolumeEvaluationSelector.currentNode()
-        )
-        reference_volume_evaluation_node = segmentation_node_to_labelmap(self.ui.referenceVolumeSelector.currentNode())
+        input_volume_evaluation_node = self.ui.inputVolumeEvaluationSelector.currentNode()
+        reference_volume_evaluation_node = self.ui.referenceVolumeSelector.currentNode()
 
         # Resample the input volume to match the reference grid, using the selected transform
         params = {
@@ -2168,14 +2152,13 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                 self.ui.outputVolumeSelector.baseName
                 + "_"
                 + app.get_name()
-                + ("_Segmentation" if want_label else "_Output")
             )
 
-            node = slicer.mrmlScene.AddNewNodeByClass(expected_class, base_name)
+            node = slicer.mrmlScene.AddNewNodeByClass(expected_class, base_name+ ("_Segmentation" if want_label else "_Output"))
             self.ui.outputVolumeSelector.setCurrentNode(node)
             self.ui.segmentationShow3DButton.setVisible(node.IsA("vtkMRMLSegmentationNode"))
             if node.IsA("vtkMRMLSegmentationNode"):
-                tmp_labelmap = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLabelMapVolumeNode", "TempLabelmap")
+                tmp_labelmap = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLabelMapVolumeNode", base_name+"_LabelMap")
                 slicer.util.updateVolumeFromArray(tmp_labelmap, data[0])
                 tmp_labelmap.CopyOrientation(self.ui.inputVolumeSelector.currentNode())
                 node.CreateDefaultDisplayNodes()
@@ -2185,6 +2168,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                 segmentation = node.GetSegmentation()
                 for label_value, segment_id in zip(np.unique(data[0])[1:], range(segmentation.GetNumberOfSegments())):
                     segment = segmentation.GetNthSegment(segment_id)
+                    
                     label_value = int(label_value)
 
                     if label_value in label_value_to_segment_name:
@@ -2202,9 +2186,6 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                     else:
                         random.seed(label_value)
                         segment.SetColor(random.random(), random.random(), random.random())
-
-                slicer.mrmlScene.RemoveNode(tmp_labelmap)
-                segmentation_node_to_labelmap(node)
             else:
                 # Populate the node with the first channel of the prediction data
                 slicer.util.updateVolumeFromArray(node, data[0])

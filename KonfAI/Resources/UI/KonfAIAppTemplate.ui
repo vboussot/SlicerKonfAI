@@ -563,7 +563,6 @@
                                     <property name="nodeTypes">
                                        <stringlist>
                                           <string>vtkMRMLScalarVolumeNode</string>
-                                          <string>vtkMRMLSegmentationNode</string>
                                           <string>vtkMRMLLabelMapVolumeNode</string>
                                        </stringlist>
                                     </property>
@@ -588,7 +587,6 @@
                                     <property name="nodeTypes">
                                        <stringlist>
                                           <string>vtkMRMLScalarVolumeNode</string>
-                                          <string>vtkMRMLSegmentationNode</string>
                                           <string>vtkMRMLLabelMapVolumeNode</string>
                                        </stringlist>
                                     </property>
