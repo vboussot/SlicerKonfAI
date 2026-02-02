@@ -1157,6 +1157,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.ui.qaTabWidget.currentChanged.connect(self.on_tab_changed)
         self.ui.appComboBox.currentIndexChanged.connect(self.on_app_selected)
 
+        self.ui.uncertaintyCheckBox.toggled.connect(self.on_uncertainty_toggled)
+        
         self.chip_selector = ChipSelector(
             self.ui.checkpointsComboBox,
             self.ui.selectedCheckpointsWidget.layout(),
@@ -1165,6 +1167,9 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             on_change=self.on_checkpoint_selected_change,
         )
         self.app_local_repositoy: list[str] = []
+
+    def on_uncertainty_toggled(self, checked: bool) -> None:
+        self.set_parameter("uncertainty", str(checked))
 
     def on_checkpoint_selected_change(self, checkpoints_selected: list[str]):
         self.set_parameter("checkpoints_name", ",".join(checkpoints_selected))
@@ -1354,6 +1359,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         # Ensemble / TTA / MC-dropout defaults based on app capabilities
         if not self.get_parameter("number_of_tta"):
             self.set_parameter("number_of_tta", str(current_app.get_maximum_tta()) if current_app else "0")
+        if not self.get_parameter("uncertainty"):
+            self.set_parameter("uncertainty", "False")
         if not self.get_parameter("number_of_mc_dropout"):
             self.set_parameter("number_of_mc_dropout", str(current_app.get_mc_dropout()) if current_app else "0")
         self.initialize_gui_from_parameter_node()
@@ -1377,6 +1384,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         # Ensemble / TTA / MC-dropout spin boxes
         self.ui.ttaSpinBox.setValue(int(self.get_parameter("number_of_tta")))
         self.ui.mcDropoutSpinBox.setValue(int(self.get_parameter("number_of_mc_dropout")))
+        self.ui.uncertaintyCheckBox.setChecked(self.get_parameter("uncertainty") == "True")
 
         # Input volume
         self.ui.inputVolumeSelector.setCurrentNode(self.get_parameter_node("InputVolume"))
@@ -1521,6 +1529,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.chip_selector.update(app.get_checkpoints_name_available(), app.get_checkpoints_name(), checkpoints_name)
         if not self.get_parameter("number_of_tta") or int(self.get_parameter("number_of_tta")) > app.get_maximum_tta():
             self.set_parameter("number_of_tta", str(app.get_maximum_tta()))
+
         if (
             not self.get_parameter("number_of_mc_dropout")
             or int(self.get_parameter("number_of_mc_dropout")) > app.get_mc_dropout()
@@ -2096,6 +2105,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             "--mc",
             str(self.ui.mcDropoutSpinBox.value),
         ]
+        if self.ui.uncertaintyCheckBox.isChecked():
+            args += ["-uncertainty"]
 
         # Device selection (GPU or CPU)
         if devices:

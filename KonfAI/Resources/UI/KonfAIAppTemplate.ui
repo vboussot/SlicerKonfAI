@@ -274,7 +274,7 @@
                                     <item row="3" column="1">
                                        <layout class="QHBoxLayout" name="hLayout_sampling">
                                           <property name="spacing">
-                                             <number>20</number>
+                                             <number>10</number>
                                           </property>
                                           <!-- Ensemble -->
                                           <item>
@@ -283,7 +283,6 @@
                                                    <number>4</number>
                                                 </property>
 
-                                                <!-- Label -->
                                                 <item>
                                                    <widget class="QLabel" name="label_ensemble">
                                                    <property name="text">
@@ -292,19 +291,17 @@
                                                    </widget>
                                                 </item>
 
-                                                <!-- ComboBox (checkpoint / preset) -->
                                                 <item>
                                                    <widget class="QComboBox" name="checkpointsComboBox">
                                                    <property name="toolTip">
                                                       <string>Select ensemble checkpoint or preset.</string>
                                                    </property>
                                                    <property name="minimumWidth">
-                                                      <number>160</number>
+                                                      <number>100</number>
                                                    </property>
                                                    </widget>
                                                 </item>
 
-                                                <!-- SpinBox (nombre) -->
                                                 <item>
                                                    <widget class="QSpinBox" name="ensembleSpinBox">
                                                    <property name="toolTip">
@@ -327,32 +324,22 @@
                                                    </property>
                                                    </widget>
                                                 </item>
-
-                                                <!-- Spacer pour pousser à gauche si besoin -->
-                                                <item>
-                                                   <spacer name="horizontalSpacer_ensemble">
-                                                   <property name="orientation">
-                                                      <enum>Qt::Horizontal</enum>
-                                                   </property>
-                                                   <property name="sizeHint" stdset="0">
-                                                      <size>
-                                                         <width>10</width>
-                                                         <height>20</height>
-                                                      </size>
-                                                   </property>
-                                                   </spacer>
-                                                </item>
-
                                              </layout>
                                              </item>
                                           <!-- TTA -->
                                           <item>
                                              <layout class="QHBoxLayout" name="hLayout_tta">
                                                 <property name="spacing">
-                                                   <number>2</number>
+                                                   <number>4</number>
                                                 </property>
                                                 <item>
                                                    <widget class="QLabel" name="label_tta">
+                                                      <property name="sizePolicy">
+                                                         <sizepolicy hsizetype="Fixed" vsizetype="Preferred">
+                                                            <horstretch>0</horstretch>
+                                                            <verstretch>0</verstretch>
+                                                         </sizepolicy>
+                                                      </property>
                                                       <property name="text">
                                                          <string>TTA:</string>
                                                       </property>
@@ -386,10 +373,16 @@
                                           <item>
                                              <layout class="QHBoxLayout" name="hLayout_mcdo">
                                                 <property name="spacing">
-                                                   <number>2</number>
+                                                   <number>4</number>
                                                 </property>
                                                 <item>
                                                    <widget class="QLabel" name="label_mcdo">
+                                                      <property name="sizePolicy">
+                                                         <sizepolicy hsizetype="Fixed" vsizetype="Preferred">
+                                                            <horstretch>0</horstretch>
+                                                            <verstretch>0</verstretch>
+                                                         </sizepolicy>
+                                                      </property>
                                                       <property name="text">
                                                          <string>MC Dropout:</string>
                                                       </property>
@@ -419,6 +412,26 @@
                                                 </item>
                                              </layout>
                                           </item>
+                                          <item>
+                                             <layout class="QHBoxLayout" name="hLayout_uncertainty">
+                                                <property name="spacing">
+                                                   <number>4</number>
+                                                </property>
+                                                <item>
+                                                   <widget class="QCheckBox" name="uncertaintyCheckBox">
+                                                   <property name="toolTip">
+                                                      <string>Enable uncertainty estimation stores inference stack.</string>
+                                                   </property>
+                                                   <property name="text">
+                                                      <string>Uncertainty</string>
+                                                   </property>
+                                                   <property name="checked">
+                                                      <bool>false</bool>
+                                                   </property>
+                                                   </widget>
+                                                </item>
+                                             </layout>
+                                             </item>
                                        </layout>
                                     </item>
                                     <!-- Selected checkpoints chips container -->
