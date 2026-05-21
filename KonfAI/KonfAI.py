@@ -165,25 +165,25 @@ def install_torch() -> bool:
 
 
 def install_konfai() -> bool:
-    package = "konfai"
+    package = "konfai-apps"
 
     installed = get_installed_version(package)
     latest = get_latest_pypi_version(package)
 
     if latest is None:
         if installed is not None:
-            print(f"[Konfai] installed ({installed}), PyPI unreachable -> keeping current.")
+            print(f"[Konfai-apps] installed ({installed}), PyPI unreachable -> keeping current.")
             return True
         if not ask_user_to_install_dependency(
-            "KonfAI",
-            "KonfAI is not installed.\n"
+            "KonfAI-apps",
+            "KonfAI-apps is not installed.\n"
             "PyPI cannot be reached right now, but we can still try installing.\n"
             "Do you want to try?",
         ):
             slicer.util.selectModule("Data")
             return False
-        with slicer_wait_popup("KonfAI dependency install", "Installing KonfAI..."):
-            slicer.util.pip_install("konfai")
+        with slicer_wait_popup("KonfAI-apps dependency install", "Installing KonfAI-apps..."):
+            slicer.util.pip_install("konfai-apps")
         return True
 
     if installed is None:
@@ -193,15 +193,15 @@ def install_konfai() -> bool:
         ):
             slicer.util.selectModule("Data")
             return False
-        with slicer_wait_popup("KonfAI dependency install", f"Installing KonfAI {latest}..."):
-            slicer.util.pip_install(f"konfai=={latest}")
+        with slicer_wait_popup("KonfAI-apps dependency install", f"Installing KonfAI-apps {latest}..."):
+            slicer.util.pip_install(f"konfai-apps=={latest}")
 
         return True
 
     if installed != latest:
         if not ask_user_to_install_dependency(
-            "KonfAI",
-            f"A newer KonfAI version is available.\n"
+            "KonfAI-apps",
+            f"A newer KonfAI-apps version is available.\n"
             f"Installed: {installed}\n"
             f"Latest:    {latest}\n\n"
             "Do you want to upgrade now?",
@@ -209,10 +209,10 @@ def install_konfai() -> bool:
             return True
 
         with slicer_wait_popup(
-            "KonfAI dependency upgrade",
-            f"Upgrading KonfAI from {installed} to {latest}...\n" "This may take several minutes.\n\n",
+            "KonfAI-apps dependency upgrade",
+            f"Upgrading KonfAI-apps from {installed} to {latest}...\n" "This may take several minutes.\n\n",
         ):
-            slicer.util.pip_install(f"konfai=={latest}")
+            slicer.util.pip_install(f"konfai-apps=={latest}")
     if installed is not None:
         import konfai
 
@@ -220,16 +220,16 @@ def install_konfai() -> bool:
             konfai.assert_konfai_install()
         except Exception as e:
             if not ask_user_to_install_dependency(
-                "KonfAI",
-                "KonfAI is installed but not functional (missing/broken dependencies).\n\n"
-                "Do you want to reinstall KonfAI (and its dependencies) now?\n\n"
+                "KonfAI-apps",
+                "KonfAI-apps is installed but not functional (missing/broken dependencies).\n\n"
+                "Do you want to reinstall KonfAI-apps (and its dependencies) now?\n\n"
                 f"Details:\n{e}",
             ):
                 slicer.util.selectModule("Data")
                 return False
-            with slicer_wait_popup("KonfAI repair", "Reinstalling KonfAI and dependencies..."):
+            with slicer_wait_popup("KonfAI-apps repair", "Reinstalling KonfAI-apps and dependencies..."):
 
-                slicer.util.pip_install(f"--upgrade --force-reinstall --no-deps konfai=={latest}")
+                slicer.util.pip_install(f"--upgrade --force-reinstall --no-deps konfai-apps=={latest}")
                 slicer.util.pip_install(
                     "tqdm numpy ruamel.yaml psutil tensorboard lxml h5py nvidia-ml-py requests huggingface_hub"
                 )
@@ -237,7 +237,7 @@ def install_konfai() -> bool:
                 konfai.assert_konfai_install()
                 return True
             except Exception as e2:
-                slicer.util.errorDisplay("KonfAI was reinstalled but is still not functional.\n\n" f"{e2}")
+                slicer.util.errorDisplay("KonfAI-apps was reinstalled but is still not functional.\n\n" f"{e2}")
                 slicer.util.selectModule("Data")
                 return False
     return True
@@ -1175,7 +1175,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.set_parameter("checkpoints_name", ",".join(checkpoints_selected))
 
     def on_refresh_app(self):
-        from konfai.utils.utils import AppRepositoryError
+        from konfai_apps.app_repository import AppRepositoryError
 
         try:
             self.populate_apps(True)
@@ -1258,8 +1258,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
     def populate_apps(self, force_update: bool = False) -> None:
         remote_server, ok = self.get_remote_server()
-        from konfai.utils.utils import (
-            AppRepositoryError,
+        from konfai.utils.errors import AppRepositoryError
+        from konfai_apps.app_repository import (
             get_app_repository_info,
             get_available_apps_on_hf_repo,
             get_available_apps_on_remote_server,
@@ -1305,7 +1305,6 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.ui.appComboBox.clear()
         for app in apps:
             self.ui.appComboBox.addItem(app.get_display_name(), app)
-        self.ui.appComboBox.blockSignals(was_blocked)
         app_param = self.get_parameter("App")
         index = 0
         for i in range(self.ui.appComboBox.count):
@@ -1314,6 +1313,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                 index = i
                 break
         self.ui.appComboBox.setCurrentIndex(index)
+        self.ui.appComboBox.blockSignals(was_blocked)
+        self.on_app_selected()
 
     def enter(self) -> None:
         """
@@ -1507,7 +1508,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             self.ui.addAppButton.setEnabled(True)
             self.ui.configButton.setEnabled(True)
 
-        from konfai.utils.utils import LocalAppRepositoryFromDirectory
+        from konfai_apps.app_repository import LocalAppRepositoryFromDirectory
 
         if isinstance(app, LocalAppRepositoryFromDirectory):
             self.ui.configButton.setIcon(QIcon(resource_path("Icons/gear.png")))
@@ -1578,7 +1579,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         This is intended for locally added apps, not Hugging Face apps.
         """
-        from konfai.utils.utils import LocalAppRepositoryFromDirectory
+        from konfai_apps.app_repository import LocalAppRepositoryFromDirectory
 
         app = self.ui.appComboBox.currentData
 
@@ -1620,7 +1621,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         app = self.ui.appComboBox.currentData
         if app is None:
             return
-        from konfai.utils.utils import LocalAppRepositoryFromHF
+        from konfai_apps.app_repository import LocalAppRepositoryFromHF
 
         if isinstance(app, LocalAppRepositoryFromHF):
             filenames = LocalAppRepositoryFromHF.get_filenames(app._repo_id, app._app_name, True)
@@ -1636,7 +1637,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
             pycode = textwrap.dedent(
                 f"""
-                from konfai.utils.utils import LocalAppRepositoryFromHF, MinimalLog
+                from konfai_apps.app_repository import LocalAppRepositoryFromHF
+                from konfai.utils.runtime import MinimalLog
                 with MinimalLog() as log:
                     filenames = {selected_files!r}
                     for filename in filenames:
@@ -1650,7 +1652,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             )
 
             def on_end_function() -> None:
-                from konfai.utils.utils import get_app_repository_info
+                from konfai_apps.app_repository import get_app_repository_info
 
                 idx = self.ui.appComboBox.currentIndex
                 app = self.ui.appComboBox.currentData
@@ -1692,7 +1694,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         The folder is expected to contain a valid KonfAI app configuration (YAML + weights).
         """
-        from konfai.utils.utils import LocalAppRepositoryFromDirectory
+        from konfai_apps.app_repository import LocalAppRepositoryFromDirectory
 
         app_dir = QFileDialog.getExistingDirectory(None, "Select App Folder", os.path.expanduser("~"))
         if not app_dir:
@@ -1749,7 +1751,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         a subdirectory (app name) is selected among the available directories.
         """
         from huggingface_hub import HfApi
-        from konfai.utils.utils import LocalAppRepositoryFromHF
+        from konfai_apps.app_repository import LocalAppRepositoryFromHF
 
         text = QInputDialog().getText(
             self,
@@ -1779,7 +1781,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         dirs = sorted({path.split("/")[0] for path in files if "/" in path})
         app_name = self.ask_subdir(dirs)
         if app_name:
-            from konfai.utils.utils import is_app_repo
+            from konfai_apps.app_repository import is_app_repo
 
             state, error, _ = is_app_repo(repo_id, app_name)
             if not state:
@@ -1809,7 +1811,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         This helper guides the user through selecting a parent directory,
         naming the fine-tune app folder and creating a basic skeleton with a README.
         """
-        from konfai.utils.utils import LocalAppRepositoryFromDirectory
+        from konfai_apps.app_repository import LocalAppRepositoryFromDirectory
 
         app = self.ui.appComboBox.currentData
         if app is None:
