@@ -21,12 +21,14 @@ import os
 import random
 import re
 import shutil
+import subprocess
+import sys
 import time
 import urllib.request
 from abc import abstractmethod
 from collections.abc import Callable
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Optional
 
 import numpy as np
@@ -38,7 +40,6 @@ from qt import (
     QCheckBox,
     QColor,
     QCursor,
-    QDesktopServices,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -60,7 +61,6 @@ from qt import (
     QSpinBox,
     Qt,
     QTabWidget,
-    QUrl,
     QVBoxLayout,
     QWidget,
 )
@@ -112,6 +112,171 @@ def ask_user_to_install_dependency(package_label: str, details: str) -> bool:
     mb.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
     mb.setDefaultButton(QMessageBox.Yes)
     return mb.exec_() == QMessageBox.Yes
+
+
+def _get_system_gui_environment() -> dict[str, str]:
+    """
+    Build an environment suitable for launching system GUI applications.
+
+    Slicer adjusts library-related variables for its own runtime. External GUI
+    apps such as file browsers should instead start from Slicer's startup
+    environment, while keeping the current desktop-session variables.
+    """
+    try:
+        env = dict(slicer.util.startupEnvironment())
+    except Exception:
+        env = dict(os.environ)
+        for key in (
+            "LD_LIBRARY_PATH",
+            "DYLD_LIBRARY_PATH",
+            "PYTHONHOME",
+            "PYTHONPATH",
+            "QT_PLUGIN_PATH",
+            "QML2_IMPORT_PATH",
+        ):
+            env.pop(key, None)
+
+    for key in (
+        "DBUS_SESSION_BUS_ADDRESS",
+        "DESKTOP_SESSION",
+        "DISPLAY",
+        "HOME",
+        "KDE_FULL_SESSION",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LOGNAME",
+        "USER",
+        "WAYLAND_DISPLAY",
+        "XAUTHORITY",
+        "XDG_CURRENT_DESKTOP",
+        "XDG_RUNTIME_DIR",
+        "XDG_SESSION_DESKTOP",
+    ):
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+
+    return env
+
+
+def _launch_external_gui_command(command: list[str], env: dict[str, str]) -> tuple[bool, str | None]:
+    """
+    Launch a GUI command and treat fast non-zero exits as failures.
+
+    GUI launchers generally return quickly on success. If the process is still
+    alive after a short wait, we consider the launch successful and leave it
+    running.
+    """
+    try:
+        process = subprocess.Popen(
+            command,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        return False, str(exc)
+
+    try:
+        stdout, stderr = process.communicate(timeout=2.0)
+    except subprocess.TimeoutExpired:
+        return True, None
+
+    if process.returncode == 0:
+        return True, None
+
+    details = (stderr or stdout or f"Exited with code {process.returncode}").strip()
+    return False, details
+
+
+def open_path_in_file_browser(path: Path | str) -> tuple[bool, str | None]:
+    """
+    Open a local path in the system file browser.
+
+    Use a clean Slicer startup environment so external launchers do not inherit
+    Slicer's bundled libraries.
+    """
+    local_path = Path(path).expanduser()
+    if not local_path.exists():
+        return False, f"Path does not exist: {local_path}"
+
+    path_str = str(local_path.resolve())
+
+    if os.name == "nt":
+        try:
+            os.startfile(path_str)
+            return True, None
+        except OSError as exc:
+            return False, str(exc)
+
+    if sys.platform == "darwin":
+        return _launch_external_gui_command(["open", path_str], _get_system_gui_environment())
+
+    if sys.platform.startswith("linux"):
+        commands = [["xdg-open", path_str], ["gio", "open", path_str]]
+        env = _get_system_gui_environment()
+        errors: list[str] = []
+        for command in commands:
+            if not shutil.which(command[0]):
+                continue
+            launched, error = _launch_external_gui_command(command, env)
+            if launched:
+                return True, None
+            if error:
+                errors.append(f"{command[0]}: {error}")
+        return False, "\n".join(errors) if errors else "No working file browser launcher was found."
+
+    return False, f"Unsupported platform for opening a file browser: {sys.platform}"
+
+
+def split_hf_repo_reference(repo_id: str) -> tuple[str, str | None]:
+    """
+    Split a Hugging Face repository reference into repo id and optional revision.
+    """
+    base_repo_id, _, revision = repo_id.partition("@")
+    return base_repo_id, revision or None
+
+
+def get_hf_app_file_list(repo_id: str, app_name: str) -> list[str]:
+    """
+    Return all files contained in a Hugging Face app folder, recursively.
+
+    The returned paths are relative to the app folder so they can be displayed
+    clearly in the UI and re-expanded into allow_patterns when syncing.
+    """
+    from huggingface_hub import HfApi
+    from huggingface_hub.hf_api import RepoFolder
+
+    base_repo_id, revision = split_hf_repo_reference(repo_id)
+
+    try:
+        tree = HfApi().list_repo_tree(
+            repo_id=base_repo_id,
+            path_in_repo=app_name,
+            recursive=True,
+            revision=revision,
+            repo_type="model",
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to inspect '{app_name}' in Hugging Face repository '{repo_id}'.\n{exc}"
+        ) from exc
+
+    app_root = PurePosixPath(app_name)
+    files: list[str] = []
+    for entry in tree:
+        if isinstance(entry, RepoFolder):
+            continue
+        try:
+            relative_path = PurePosixPath(entry.path).relative_to(app_root)
+        except ValueError:
+            continue
+        files.append(str(relative_path))
+
+    return sorted(files)
 
 
 @contextmanager
@@ -607,14 +772,14 @@ class DownloadFilesDialog(QDialog):
         self.setModal(True)
         self.resize(600, 450)
 
-        self.label = QLabel("Select files to download:")
+        self.label = QLabel("Select files to refresh:")
         self.listw = QListWidget()
         self.listw.setSelectionMode(QListWidget.MultiSelection)
 
         for f in files:
             item = QListWidgetItem(f)
 
-            if f.endswith(".pt") and f not in checkpoints_name_available:
+            if Path(f).suffix == ".pt" and Path(f).name not in checkpoints_name_available:
                 item.setForeground(QColor("#9ca3af"))
                 font = item.font()
                 font.setItalic(True)
@@ -672,7 +837,14 @@ class AppTemplateWidget(QWidget):
         ui_widget.setMRMLScene(slicer.mrmlScene)
         self._initialized = False
 
-    def app_setup(self, update_logs, update_progress, parameter_node) -> None:
+    def app_setup(
+        self,
+        update_logs,
+        update_progress,
+        parameter_node,
+        begin_status_progress: Callable[[], None] | None = None,
+        end_status_progress: Callable[[], None] | None = None,
+    ) -> None:
         """
         Initialize the application with callbacks and parameter node.
 
@@ -688,7 +860,24 @@ class AppTemplateWidget(QWidget):
         self._update_logs = update_logs
         self._update_progress = update_progress
         self._parameter_node = parameter_node
+        self._begin_status_progress = begin_status_progress
+        self._end_status_progress = end_status_progress
         self.process = Process(update_logs, update_progress, self.set_running)
+
+    def _set_status_progress(self, value: int, message: str) -> None:
+        self._update_progress(value, message)
+        slicer.app.processEvents()
+
+    @contextmanager
+    def transient_status_progress(self, initial_message: str):
+        if getattr(self, "_begin_status_progress", None) is not None:
+            self._begin_status_progress()
+        try:
+            self._set_status_progress(0, initial_message)
+            yield
+        finally:
+            if getattr(self, "_end_status_progress", None) is not None:
+                self._end_status_progress()
 
     def get_work_dir(self) -> Path | None:
         """
@@ -1256,6 +1445,26 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
     def on_remote_server_changed(self):
         self.populate_apps()
 
+    @contextmanager
+    def _apps_loading_feedback(self, initial_message: str):
+        controls = [
+            self.ui.appComboBox,
+            self.ui.addAppButton,
+            self.ui.removeAppButton,
+            self.ui.configButton,
+            self.ui.refreshAppsListButton,
+        ]
+        previous_states = [(control, control.enabled) for control in controls]
+        for control, _ in previous_states:
+            control.enabled = False
+
+        with self.transient_status_progress(initial_message):
+            try:
+                yield
+            finally:
+                for control, was_enabled in previous_states:
+                    control.enabled = was_enabled
+
     def populate_apps(self, force_update: bool = False) -> None:
         remote_server, ok = self.get_remote_server()
         from konfai.utils.errors import AppRepositoryError
@@ -1265,41 +1474,61 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             get_available_apps_on_remote_server,
         )
 
-        apps_name: list[str] = []
-        if remote_server is None:
-            settings = QSettings()
-            raw = settings.value(f"KonfAI-Settings/{self._name}/Apps")
-            apps_name = []
-            if raw is not None:
-                apps_name = json.loads(raw)
+        with self._apps_loading_feedback("Loading applications..."):
+            apps_name: list[str] = []
+            if remote_server is None:
+                settings = QSettings()
+                raw = settings.value(f"KonfAI-Settings/{self._name}/Apps")
+                apps_name = []
+                if raw is not None:
+                    apps_name = json.loads(raw)
+                default_apps_name = []
 
-            default_apps_name = []
+                repo_count = max(len(self._konfai_repo_list), 1)
+                for idx, konfai_repo in enumerate(self._konfai_repo_list, start=1):
+                    self._set_status_progress(
+                        int(((idx - 1) / repo_count) * 40),
+                        f"Checking {konfai_repo} on Hugging Face...",
+                    )
+                    try:
+                        default_apps_name += [
+                            konfai_repo + ":" + app_name
+                            for app_name in get_available_apps_on_hf_repo(konfai_repo, force_update)
+                        ]
+                    except AppRepositoryError as e:
+                        slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
+                        return
+                    self._set_status_progress(
+                        int((idx / repo_count) * 40),
+                        f"Loaded app names from {konfai_repo}.",
+                    )
+                apps_name = list(set(default_apps_name + apps_name))
+                self.app_local_repositoy = apps_name
+            elif ok:
+                self._set_status_progress(10, "Loading applications from remote server...")
+                apps_name = [
+                    f"{remote_server.host}:{remote_server.port}:{app_name}|{remote_server.token}"
+                    for app_name in get_available_apps_on_remote_server(remote_server)
+                ]
+                self._set_status_progress(40, "Loaded application names from remote server.")
 
-            for konfai_repo in self._konfai_repo_list:
-                try:
-                    default_apps_name += [
-                        konfai_repo + ":" + app_name
-                        for app_name in get_available_apps_on_hf_repo(konfai_repo, force_update)
-                    ]
-                except AppRepositoryError as e:
-                    slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
-                    return
-            apps_name = list(set(default_apps_name + apps_name))
-            self.app_local_repositoy = apps_name
-        elif ok:
-            apps_name = [
-                f"{remote_server.host}:{remote_server.port}:{app_name}|{remote_server.token}"
-                for app_name in get_available_apps_on_remote_server(remote_server)
-            ]
+            # Populate the app combo box with apps found in the provided Hugging Face repos or available app on remote server
+            apps = []
+            sorted_apps_name = sorted(apps_name)
+            try:
+                if not sorted_apps_name:
+                    self._set_status_progress(100, "No applications found.")
+                for idx, app_name in enumerate(sorted_apps_name, start=1):
+                    self._set_status_progress(
+                        40 + int((idx / len(sorted_apps_name)) * 60),
+                        f"Initializing {app_name}...",
+                    )
+                    apps.append(get_app_repository_info(app_name, False))
+            except Exception as e:
+                slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
+                return
 
-        # Populate the app combo box with apps found in the provided Hugging Face repos or available app on remote server
-        apps = []
-        try:
-            for app_name in sorted(apps_name):
-                apps.append(get_app_repository_info(app_name, False))
-        except Exception as e:
-            slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
-            return
+            self._set_status_progress(100, f"Loaded {len(apps)} applications.")
 
         was_blocked = self.ui.appComboBox.blockSignals(True)
         self.ui.appComboBox.clear()
@@ -1539,12 +1768,14 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         self.ui.ttaSpinBox.setEnabled(app.get_maximum_tta() > 0)
         self.ui.ttaSpinBox.setMaximum(app.get_maximum_tta())
-
+        
         self.ui.mcDropoutSpinBox.setEnabled(app._mc_dropout > 0)
         self.ui.mcDropoutSpinBox.setMaximum(app._mc_dropout)
 
         # Enable QA sections based on app capabilities (evaluation/uncertainty support)
         has_inference, has_evaluation, has_uncertainty = app.has_capabilities()
+        self.ui.uncertaintyCheckBox.setEnabled(has_uncertainty)
+        
         self.ui.evaluationCollapsible.setEnabled(has_evaluation or has_uncertainty)
         if not has_evaluation and not has_uncertainty:
             self.ui.evaluationCollapsible.collapsed = True
@@ -1624,8 +1855,13 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         from konfai_apps.app_repository import LocalAppRepositoryFromHF
 
         if isinstance(app, LocalAppRepositoryFromHF):
-            filenames = LocalAppRepositoryFromHF.get_filenames(app._repo_id, app._app_name, True)
-            dlg = DownloadFilesDialog(filenames, app.get_checkpoints_name_available())
+            try:
+                all_files = get_hf_app_file_list(app._repo_id, app._app_name)
+            except Exception as exc:
+                QMessageBox.critical(None, "Hugging Face", str(exc))
+                return
+
+            dlg = DownloadFilesDialog(all_files, app.get_checkpoints_name_available())
             if dlg.exec() != dlg.Accepted:
                 return
             selected_files = dlg.selected_files()
@@ -1639,9 +1875,10 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                 f"""
                 from konfai_apps.app_repository import LocalAppRepositoryFromHF
                 from konfai.utils.runtime import MinimalLog
+
                 with MinimalLog() as log:
-                    filenames = {selected_files!r}
-                    for filename in filenames:
+                    selected_files = {selected_files!r}
+                    for filename in selected_files:
                         LocalAppRepositoryFromHF.download(
                             "{app._repo_id}",
                             "{app._app_name}" + "/" + filename,
@@ -1660,7 +1897,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                 self.ui.appComboBox.setItemData(idx, app)
                 self.on_app_selected()
 
-            self._update_logs("Starting download...", True)
+            self._update_logs("Starting Hugging Face download...", True)
             self._update_progress(0, "")
             self.set_running(True)
             self.ui.runInferenceButton.enabled = True
@@ -1668,7 +1905,9 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             self.process.run(sys.executable, Path("./").resolve(), ["-c", pycode], on_end_function)
         else:
             config_files = app.download_config_file()
-            QDesktopServices.openUrl(QUrl.fromLocalFile(config_files[0].parent))
+            opened, error = open_path_in_file_browser(config_files[0].parent)
+            if not opened:
+                slicer.util.errorDisplay(f"Could not open folder:\n{config_files[0].parent}", detailedText=error or "")
 
     def on_add_app(self) -> None:
         """
@@ -1678,6 +1917,10 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         act_folder = m.addAction("Add from folder…")
         act_hf = m.addAction("Add from Hugging Face…")
         act_ft = m.addAction("Setup fine-tuning")
+        can_setup_fine_tuning = self._has_root_training_config(self.ui.appComboBox.currentData)
+        act_ft.setEnabled(can_setup_fine_tuning)
+        if not can_setup_fine_tuning:
+            act_ft.setToolTip("Fine-tuning setup requires a root Config.yml file in the selected app.")
         chosen = m.exec_(QCursor.pos())
         if chosen is None:
             return
@@ -1743,6 +1986,34 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         return dlg.textValue()
 
+    def _has_root_training_config(self, app) -> bool:
+        """
+        Return whether the selected app exposes a root-level ``Config.yml`` file.
+
+        Fine-tuning setup currently expects the training configuration to be
+        copied to ``./Config.yml`` in the generated app folder, so nested config
+        files are not treated as valid for this action.
+        """
+        if app is None:
+            return False
+
+        from konfai_apps.app_repository import AppRepositoryInfoFromRemoteServer, LocalAppRepositoryFromDirectory
+        from konfai_apps.app_repository import LocalAppRepositoryFromHF
+
+        try:
+            if isinstance(app, LocalAppRepositoryFromDirectory):
+                filenames = LocalAppRepositoryFromDirectory.get_filenames(app._app_directory, app._app_name)
+            elif isinstance(app, LocalAppRepositoryFromHF):
+                filenames = LocalAppRepositoryFromHF.get_filenames(app._repo_id, app._app_name, False)
+            elif isinstance(app, AppRepositoryInfoFromRemoteServer):
+                return False
+            else:
+                return False
+        except Exception:
+            return False
+
+        return "Config.yml" in filenames
+
     def on_add_hf(self) -> None:
         """
         Add a app from a Hugging Face repository.
@@ -1768,11 +2039,14 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         files = None
         try:
-            files = api.list_repo_files(
-                repo_id=base_repo_id,
-                revision=revision or None,
-                repo_type="model",
-            )
+            with self._apps_loading_feedback(f"Checking {repo_id} on Hugging Face..."):
+                self._set_status_progress(20, f"Connecting to {repo_id}...")
+                files = api.list_repo_files(
+                    repo_id=base_repo_id,
+                    revision=revision or None,
+                    repo_type="model",
+                )
+                self._set_status_progress(100, f"Loaded repository tree for {repo_id}.")
         except Exception:
             QMessageBox.critical(None, "Hugging Face", f"Repository '{repo_id}' does not exist on Hugging Face.")
             return
@@ -1783,12 +2057,20 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         if app_name:
             from konfai_apps.app_repository import is_app_repo
 
-            state = is_app_repo(files)
+            app_files = [path.removeprefix(f"{app_name}/") for path in files if path.startswith(f"{app_name}/")]
+            state = is_app_repo(app_files)
             if not state:
-                QMessageBox.critical(None, "App", "The selected repository does not contain a valid KonfAI app structure.")
+                QMessageBox.critical(
+                    None,
+                    "App",
+                    f"The selected folder '{app_name}' does not contain a valid KonfAI app structure.",
+                )
                 return
 
-            app = LocalAppRepositoryFromHF(repo_id, app_name, True)
+            with self._apps_loading_feedback(f"Initializing {app_name}..."):
+                self._set_status_progress(60, f"Loading metadata for {app_name}...")
+                app = LocalAppRepositoryFromHF(repo_id, app_name, True)
+                self._set_status_progress(100, f"Loaded {app_name}.")
 
             # Do not add duplicate display names
             items = [self.ui.appComboBox.itemText(i) for i in range(self.ui.appComboBox.count)]
@@ -1815,6 +2097,13 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         app = self.ui.appComboBox.currentData
         if app is None:
+            return
+        if not self._has_root_training_config(app):
+            QMessageBox.warning(
+                None,
+                "Fine tune",
+                "The selected app does not contain a root Config.yml file required for fine-tuning setup.",
+            )
             return
 
         # Choose the parent directory for the new app
@@ -2620,7 +2909,13 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         # Initialize each app with shared callbacks and parameter node
         for app in apps:
             self._apps[app._name] = app
-            app.app_setup(self.update_logs, self.update_progress, self._parameter_node)
+            app.app_setup(
+                self.update_logs,
+                self.update_progress,
+                self._parameter_node,
+                self.begin_transient_progress_feedback,
+                self.end_transient_progress_feedback,
+            )
 
         # Enter the first app by default
         app = next(iter(self._apps.values()))
@@ -2735,7 +3030,10 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         Open the current KonfAI app working directory in the file browser.
         """
         if self._current_konfai_app and self._current_konfai_app.get_work_dir():
-            QDesktopServices.openUrl(QUrl.fromLocalFile(self._current_konfai_app.get_work_dir()))
+            work_dir = self._current_konfai_app.get_work_dir()
+            opened, error = open_path_in_file_browser(work_dir)
+            if not opened:
+                slicer.util.errorDisplay(f"Could not open folder:\n{work_dir}", detailedText=error or "")
 
     def _update_ram(self) -> None:
         """
@@ -2824,6 +3122,20 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
             self.ui.logText.plainText = text
         else:
             self.ui.logText.appendPlainText(text)
+
+    def begin_transient_progress_feedback(self) -> None:
+        if hasattr(self, "_transient_progress_state") and self._transient_progress_state is not None:
+            return
+        self._transient_progress_state = (self.ui.progressBar.value, self.ui.speedLabel.text)
+
+    def end_transient_progress_feedback(self) -> None:
+        state = getattr(self, "_transient_progress_state", None)
+        if state is None:
+            return
+        value, text = state
+        self.ui.progressBar.value = value
+        self.ui.speedLabel.text = text
+        self._transient_progress_state = None
 
     def update_progress(self, value: int, speed: str | None = None) -> None:
         """
@@ -2946,7 +3258,7 @@ class KonfAIWidget(ScriptedLoadableModuleWidget):
         # Create and register one KonfAI app specialized for inference
         prediction_widget = KonfAIAppTemplateWidget(
             "Inference",
-            ["VBoussot/ImpactSynth", "VBoussot/MRSegmentator-KonfAI", "VBoussot/TotalSegmentator-KonfAI"],
+            ["VBoussot/ImpactSynth", "VBoussot/MRSegmentator-KonfAI", "VBoussot/TotalSegmentator-KonfAI", "VBoussot/ImpactSeg"],
         )
         self.konfai_core.register_apps([prediction_widget])
 
