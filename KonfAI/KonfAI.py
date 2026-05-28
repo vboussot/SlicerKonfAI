@@ -1783,12 +1783,12 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         if app_name:
             from konfai_apps.app_repository import is_app_repo
 
-            state, error, _ = is_app_repo(repo_id, app_name)
+            state = is_app_repo(files)
             if not state:
-                QMessageBox.critical(None, "App", error)
+                QMessageBox.critical(None, "App", "The selected repository does not contain a valid KonfAI app structure.")
                 return
 
-            app = LocalAppRepositoryFromHF(repo_id, app_name)
+            app = LocalAppRepositoryFromHF(repo_id, app_name, True)
 
             # Do not add duplicate display names
             items = [self.ui.appComboBox.itemText(i) for i in range(self.ui.appComboBox.count)]
