@@ -766,7 +766,12 @@ class RemoteServer:
 
 
 class DownloadFilesDialog(QDialog):
-    def __init__(self, files: list[str], checkpoints_name_available: list[str]):
+    def __init__(
+        self,
+        files: list[str],
+        checkpoints_name_available: list[str],
+        on_open_folder: Callable[[], None] | None = None,
+    ):
         super().__init__()
         self.setWindowTitle("Download from Hugging Face")
         self.setModal(True)
@@ -789,10 +794,16 @@ class DownloadFilesDialog(QDialog):
             self.listw.addItem(item)
 
         # boutons (même style que ton exemple)
+        self.openFolderButton = QPushButton()
+        self.openFolderButton.setIcon(QIcon(resource_path("Icons/folder.png")))
+        self.openFolderButton.setIconSize(QSize(18, 18))
+        self.openFolderButton.setToolTip("Open local app folder")
+        self.openFolderButton.setEnabled(on_open_folder is not None)
         self.downloadButton = QPushButton("Download")
         self.cancelButton = QPushButton("Cancel")
 
         btns = QHBoxLayout()
+        btns.addWidget(self.openFolderButton)
         btns.addStretch(1)
         btns.addWidget(self.downloadButton)
         btns.addWidget(self.cancelButton)
@@ -802,8 +813,13 @@ class DownloadFilesDialog(QDialog):
         root.addWidget(self.listw)
         root.addLayout(btns)
 
+        if on_open_folder is not None:
+            self.openFolderButton.clicked.connect(on_open_folder)
         self.downloadButton.clicked.connect(lambda _=False: self.accept())
         self.cancelButton.clicked.connect(lambda _=False: self.reject())
+
+        if on_open_folder is None:
+            self.openFolderButton.hide()
 
     def selected_files(self) -> list[str]:
         return [i.text() for i in self.listw.selectedItems()]
@@ -1786,6 +1802,32 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
 
         self.set_parameter("App", app.get_name())
 
+    def _refresh_selected_app_metadata(self):
+        """
+        Reload the selected app metadata from its repository source.
+
+        This keeps checkpoint availability in sync after commands that may
+        download or update model files as a side effect.
+        """
+        app = self.ui.appComboBox.currentData
+        index = self.ui.appComboBox.currentIndex
+        if app is None or index < 0:
+            return None
+
+        from konfai_apps.app_repository import get_app_repository_info
+
+        try:
+            refreshed_app = get_app_repository_info(app.get_name(), False)
+        except Exception as exc:
+            self._update_logs(f"Unable to refresh app metadata for {app.get_display_name()}: {exc}", False)
+            return None
+
+        was_blocked = self.ui.appComboBox.blockSignals(True)
+        self.ui.appComboBox.setItemData(index, refreshed_app)
+        self.ui.appComboBox.blockSignals(was_blocked)
+        self.on_app_selected()
+        return refreshed_app
+
     def on_toggle_description(self) -> None:
         """
         Toggle between short and full app description text in the UI.
@@ -1861,7 +1903,32 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                 QMessageBox.critical(None, "Hugging Face", str(exc))
                 return
 
-            dlg = DownloadFilesDialog(all_files, app.get_checkpoints_name_available())
+            def open_local_app_folder() -> None:
+                try:
+                    config_files = app.download_config_file()
+                except Exception as exc:
+                    QMessageBox.critical(None, "Hugging Face", f"Unable to access the local app folder.\n\n{exc}")
+                    return
+
+                if not config_files:
+                    QMessageBox.warning(None, "Hugging Face", "No local app folder is available yet.")
+                    return
+
+                folder = config_files[0].parent
+                opened, error = open_path_in_file_browser(folder)
+                if not opened:
+                    QMessageBox.critical(
+                        None,
+                        "Open folder",
+                        f"Could not open folder:\n{folder}",
+                        detailedText=error or "",
+                    )
+
+            dlg = DownloadFilesDialog(
+                all_files,
+                app.get_checkpoints_name_available(),
+                on_open_folder=open_local_app_folder,
+            )
             if dlg.exec() != dlg.Accepted:
                 return
             selected_files = dlg.selected_files()
@@ -1889,13 +1956,7 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             )
 
             def on_end_function() -> None:
-                from konfai_apps.app_repository import get_app_repository_info
-
-                idx = self.ui.appComboBox.currentIndex
-                app = self.ui.appComboBox.currentData
-                app = get_app_repository_info(app.get_name(), False)
-                self.ui.appComboBox.setItemData(idx, app)
-                self.on_app_selected()
+                self._refresh_selected_app_metadata()
 
             self._update_logs("Starting Hugging Face download...", True)
             self._update_progress(0, "")
@@ -2288,6 +2349,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             It loads metrics and images produced by konfai-apps and updates
             the evaluation panel accordingly.
             """
+            self._refresh_selected_app_metadata()
+
             if not any((self._work_dir / "Evaluation").rglob("*.json")):
                 return
 
@@ -2352,6 +2415,8 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             It loads metrics and MHA images produced by konfai-apps and updates
             the uncertainty panel accordingly.
             """
+            self._refresh_selected_app_metadata()
+
             if not any((self._work_dir / "Uncertainty").rglob("*.json")):
                 return
 
@@ -2434,6 +2499,12 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             appropriate volume class (scalar vs labelmap), copies orientation and
             attributes, and configures slice viewer overlays.
             """
+            refreshed_app = self._refresh_selected_app_metadata()
+            if refreshed_app is not None:
+                app = refreshed_app
+            else:
+                app = self.ui.appComboBox.currentData
+
             data = None
             # Find the first non-stack MHA output file
             for file in (self._work_dir / "Output").rglob("*.mha"):
