@@ -40,7 +40,7 @@ This quick tutorial demonstrates the typical clinical workflow: **load → run i
 2. Open **3D Slicer** and go to **Extension Manager**
 3. Search for **KonfAI**
 4. Click **Install**
-5. Restart Slicer and open the **KonfAI** module from the **Pipeline** category
+5. Restart Slicer and open the **KonfAI** module from the **Pipelines** category
 
 ### 2) Load a case
 1. In Slicer, click **DICOM** (or drag-and-drop a NIfTI / NRRD / MHA file)
@@ -179,12 +179,12 @@ Internally, SlicerKonfAI typically:
 3. Executes the App by calling the KonfAI Apps CLI. For example, an inference call may look like:
 
    ```bash
-   konfai-apps infer \
+   konfai-apps infer <app_name> \
        -i Volume.mha \
-       -o Output
-       --ensemble 2
-       --tta 2
-       --mc 0
+       -o Output \
+       --ensemble_models <checkpoint_name> \
+       --tta 2 \
+       --mc 0 \
        --gpu 0
    ```
 4. Monitors the running process (stdout/stderr) and streams logs to the Slicer interface.
