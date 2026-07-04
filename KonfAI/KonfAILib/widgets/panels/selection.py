@@ -638,7 +638,8 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
             QMessageBox.warning(None, "Invalid name", "Please enter a valid name.")
             return
 
-        app.install_fine_tune("Config.yml", Path(parent_dir) / name, display_name, epochs, it_validation)
+        # [] selects the checkpoint(s) to fine-tune: empty means the default advertised in app.json.
+        app.install_fine_tune("Config.yml", Path(parent_dir) / name, display_name, epochs, it_validation, [])
         # Add the folder to the app combo box
         app_ft = LocalAppRepositoryFromDirectory(Path(parent_dir), name)
         self.ui.appComboBox.addItem(app_ft.get_display_name(), app_ft)
