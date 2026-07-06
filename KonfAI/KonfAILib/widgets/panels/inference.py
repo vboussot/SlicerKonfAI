@@ -72,10 +72,9 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         self._patch_default: list[int] | None = None
         self._patch_override: list[int] | None = None
         self._batch_override: int | None = None
-        # Tuned model parameters {config path: value}; empty = the app's own config defaults.
+        # Tuned model parameters {config key: value}; empty = the app's own config defaults. A nested value
+        # (e.g. the whole `resolutions` matrix) is just one entry here — it gets no special-casing.
         self._param_override: dict[str, object] = {}
-        # Edited per-resolution matrix (a model with a `resolutions` parameter), or None = the config default.
-        self._matrix_override: dict | None = None
         self.ui.advancedButton.clicked.connect(self.on_advanced_clicked)
 
         # Run button for inference
@@ -140,9 +139,6 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
 
         patch = self._patch_override or plan_patch or self._patch_default
         default_batch = self._batch_override or plan_batch or 1
-        # A 2.5D app runs slice-wise (its config uses extend_slice), which requires patch_size[0] == 1.
-        # Lock the first axis so an override can never send patch_size[0] != 1 (which crashes DatasetPatch).
-        is_2p5d = bool(patch) and patch[0] == 1
         dialog = qt.QDialog(self.ui.advancedButton)
         dialog.setWindowTitle("Advanced inference settings")
         # Roomy + scrollable: the model-parameter matrix can be tall, so wrap the form in a scroll area
@@ -167,13 +163,15 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             labels = ["Z", "Y", "X"] if len(patch) == 3 else [f"dim {i}" for i in range(len(patch))]
             for i, (label, value) in enumerate(zip(labels, patch, strict=False)):
                 spin = qt.QSpinBox()
-                if i == 0 and is_2p5d:
+                if int(value) == 1:
+                    # A patch dimension of 1 is fixed (slice-wise on that axis) — don't offer it. Keep a
+                    # hidden value holder (never shown) so the override still carries the full patch.
                     spin.setRange(1, 1)
                     spin.setValue(1)
-                    spin.setToolTip("2.5D app (slice-wise): the first patch dimension is fixed to 1.")
-                else:
-                    spin.setRange(1, 4096)
-                    spin.setValue(int(value))
+                    spins.append(spin)
+                    continue
+                spin.setRange(1, 4096)
+                spin.setValue(int(value))
                 form.addRow(f"Patch {label}:", spin)
                 spins.append(spin)
         else:
@@ -196,67 +194,29 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         auto_check.toggled.connect(_toggle)
         _toggle(auto_check.isChecked())
 
-        # Model parameters: the tunable knobs read straight from the app's resolved config (no app.json
-        # declaration needed). Kept under the same Advanced dialog so everything lives in one place; a
-        # "Save as local app" button bakes the current values into a local copy (à la fine-tune).
+        # Model parameters: the configurable knobs + their constraints, read in ONE generic call. The app's
+        # `get_parameters()` returns {values: <nested dict from the resolved config>, constraints: <parallel
+        # sparse tree from the model TYPES>}. Each value is rendered purely by STRUCTURE, overlaid with its
+        # constraint (choices -> dropdown, {min,max} -> spin bounds). A nested value such as the per-resolution
+        # `resolutions` matrix is just one entry, edited by the same recursive editor — no special case. No
+        # app.json declaration is needed; "Save as local app" bakes the current values into a local copy.
         try:
-            tunables = app.get_tunable_parameters() if (app is not None and hasattr(app, "get_tunable_parameters")) else []
-        except Exception:  # noqa: BLE001 - a config read failure must not break the dialog
-            tunables = []
-        # Enum-like fields (e.g. mode, distance) get a dropdown. The allowed SET is declared by the app's
-        # model module (TUNABLE_CHOICES) and read generically here — no field name is hard-coded in the UI.
-        try:
-            choices = app.get_tunable_choices() if (app is not None and hasattr(app, "get_tunable_choices")) else {}
-        except Exception:  # noqa: BLE001 - a choices read failure just falls back to free-text fields
-            choices = {}
-        param_widgets: list[tuple[dict, object]] = []
-        if tunables:
+            params = app.get_parameters() if (app is not None and hasattr(app, "get_parameters")) else {}
+        except Exception:  # noqa: BLE001 - a config/type read failure must not break the dialog
+            params = {}
+        values = params.get("values") or {}
+        constraints = params.get("constraints") or {}
+        param_widgets: list[tuple[str, object, object]] = []
+        if values:
             form.addRow(qt.QLabel("<b>Model parameters</b>"))
-            for tunable in tunables:
-                current = self._param_override.get(tunable["name"], tunable["value"])
-                widget, reader = self._build_value_editor(current, tunable["name"], choices)
-                param_widgets.append((tunable, reader))
-                form.addRow(f"{tunable['name']}:", widget)
-
-        # Per-resolution matrix (a model with a `resolutions` parameter): a generic grid editor. Read the
-        # same way as the tunables (straight from the resolved config), so no app.json declaration is needed.
-        matrix_value = None
-        try:
-            matrix = app.get_model_matrix() if (app is not None and hasattr(app, "get_model_matrix")) else None
-        except Exception:  # noqa: BLE001 - a config read failure must not break the dialog
-            matrix = None
-        if matrix and matrix.get("resolutions"):
-            try:
-                catalog = app.get_matrix_catalog() if hasattr(app, "get_matrix_catalog") else {}
-            except Exception:  # noqa: BLE001 - a catalog read failure just falls back to free-text refs
-                catalog = {}
-            # The matrix is just a parameter whose value is a list of objects: drop the reader-only `index`
-            # keys and hand the nested structure to the SAME generic recursive editor as the scalar knobs.
-            resolutions_value = []
-            for row in matrix["resolutions"]:
-                entry = {}
-                for key, val in row.items():
-                    if key == "index":
-                        continue
-                    if key == "models":
-                        entry["models"] = [{k: v for k, v in m.items() if k != "index"} for m in val]
-                    else:
-                        entry[key] = val
-                resolutions_value.append(entry)
-            form.addRow(qt.QLabel("<b>Model matrix (per resolution)</b>"))
-            matrix_widget, matrix_read = self._build_value_editor(resolutions_value, "resolutions", choices, catalog)
-            matrix_default = matrix_read()
-
-            def matrix_value(read=matrix_read, default=matrix_default):
-                current = read()
-                return current if current != default else None
-
-            form.addRow(matrix_widget)
-
-        if param_widgets or matrix_value is not None:
+            for name, default in values.items():
+                current = self._param_override.get(name, default)
+                widget, reader = self._build_value_editor(current, constraints.get(name), name)
+                param_widgets.append((name, default, reader))
+                form.addRow(f"{name}:", widget)
 
             def _on_save():
-                self._save_as_local_app(app, param_widgets, matrix_value, dialog)
+                self._save_as_local_app(app, param_widgets, dialog)
 
             save_button = qt.QPushButton("Save as local app…")
             save_button.setToolTip("Copy this app into a local folder with the current parameters as its defaults.")
@@ -282,18 +242,15 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             self._batch_override = batch_spin.value
         # Model-parameter overrides apply regardless of the patch/batch 'auto' toggle.
         self._param_override = self._collect_param_overrides(param_widgets)
-        self._matrix_override = matrix_value() if matrix_value is not None else None
         self._refresh_advanced_button()
 
     def _refresh_advanced_button(self):
         """Mark the gear when an override is active, so the user sees it is no longer on 'auto'."""
-        if self._patch_override or self._batch_override or self._param_override or self._matrix_override:
+        if self._patch_override or self._batch_override or self._param_override:
             patch = "x".join(str(v) for v in self._patch_override) if self._patch_override else "auto"
             tip = f"Override active — patch {patch}, batch {self._batch_override or 'auto'}"
             if self._param_override:
                 tip += f", {len(self._param_override)} parameter(s)"
-            if self._matrix_override:
-                tip += f", matrix ({len(self._matrix_override)} resolutions)"
             self.ui.advancedButton.setText("⚙*")
             self.ui.advancedButton.setToolTip(tip + ".")
         else:
@@ -323,23 +280,23 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             return "{" + body + "}"
         return str(value)
 
-    def _build_value_editor(self, value, name: str, choices: dict | None = None, catalog: dict | None = None):
+    def _build_value_editor(self, value, constraint=None, name: str = ""):
         """Generic RECURSIVE editor for one exposed parameter value — returns ``(widget, read_fn)``.
 
-        SlicerKonfAI interprets a parameter purely by STRUCTURE, with no field-name knowledge: a scalar is a
-        typed widget (a dropdown when the app declares ``choices`` for that field name), a list of scalars an
-        inline comma list, a nested object a group of rows, and a LIST OF OBJECTS a repeatable block (each
-        object interpreted the same recursive way, with add/remove). The "matrix" is therefore not special —
-        it is just a value whose type is "list of objects". ``read_fn()`` returns the value in KonfAI config
-        form: a list of objects round-trips as an indexed ``{'0': {...}}`` mapping (what ``--set`` expects),
-        a list of scalars stays a list. Semantics (labels/choices/catalog) come from the app, never hardcoded.
+        SlicerKonfAI interprets a parameter by STRUCTURE, overlaid with the app's ``constraint`` (a sparse tree
+        that mirrors the value): a scalar is a typed widget — a dropdown when the constraint carries
+        ``{"choices": [...]}``, a spinbox bounded by ``{"min", "max"}``; a list of scalars an inline comma
+        list; a nested object a group of rows; and a KonfAI dict-of-objects (keys ``'0','1',...``, as the
+        constraint marks with a ``"*"`` wildcard) a repeatable block with add/remove. The ``resolutions``
+        matrix is therefore not special — just a value whose type is "dict of objects". ``read_fn()`` returns
+        the value in KonfAI config form: a repeatable block round-trips as an indexed ``{'0': {...}}`` mapping
+        (what ``--set`` expects). No field name and no choice list is ever hard-coded here.
         """
         import copy
 
         import qt
 
-        choices = choices or {}
-        catalog = catalog or {}
+        constraint = constraint or {}
         container = qt.QWidget()
         outer = qt.QVBoxLayout(container)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -347,6 +304,24 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
 
         def is_object_list(candidate):
             return isinstance(candidate, list) and bool(candidate) and all(isinstance(i, dict) for i in candidate)
+
+        def is_object_map(candidate):  # a KonfAI dict[str, Object]: numeric string keys, object values
+            return (
+                isinstance(candidate, dict)
+                and bool(candidate)
+                and all(str(k).lstrip("-").isdigit() for k in candidate)
+                and all(isinstance(v, dict) for v in candidate.values())
+            )
+
+        def is_repeatable(candidate, cst):
+            # A repeatable collection: the constraint marks it with ``"*"``, or it structurally looks like a
+            # KonfAI dict-of-objects / list-of-objects (so it still renders even without a constraint).
+            return "*" in (cst or {}) or is_object_list(candidate) or is_object_map(candidate)
+
+        def items_of(candidate):  # normalise a dict-of-objects (or list) to an ordered list for editing
+            if isinstance(candidate, dict):
+                return [candidate[k] for k in sorted(candidate, key=lambda k: int(k))]
+            return list(candidate) if isinstance(candidate, list) else []
 
         def to_output(node):
             if is_object_list(node):
@@ -361,32 +336,35 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
                 node = node[key]
             return node
 
-        def scalar_widget(v, field):
+        def scalar_widget(v, cst):
+            cst = cst or {}
+            choices = cst.get("choices")
+            if choices is not None and not isinstance(v, (list, dict)):
+                # A field with declared choices becomes an editable dropdown (editable, so a value outside the
+                # list — e.g. a local model ref — is still allowed). The values come from the app.
+                combo = qt.QComboBox()
+                combo.setEditable(True)
+                combo.addItems([str(option) for option in choices])
+                combo.setCurrentText(str(v))
+                return combo, (lambda: combo.currentText)
             if isinstance(v, bool):  # bool before int (bool is a subclass of int)
                 w = qt.QCheckBox()
                 w.setChecked(v)
                 return w, (lambda: bool(w.isChecked()))
             if isinstance(v, int):
                 w = qt.QSpinBox()
-                w.setRange(-2147483648, 2147483647)
+                lo = int(cst["min"]) if "min" in cst else -2147483648
+                hi = int(cst["max"]) if "max" in cst else 2147483647
+                w.setRange(max(lo, -2147483648), min(hi, 2147483647))
                 w.setValue(v)
                 return w, (lambda: int(w.value))
             if isinstance(v, float):
                 w = qt.QDoubleSpinBox()
-                w.setRange(-1e12, 1e12)
                 w.setDecimals(6)
+                w.setRange(float(cst.get("min", -1e12)), float(cst.get("max", 1e12)))
                 w.setValue(v)
                 return w, (lambda: float(w.value))
             if isinstance(v, str):
-                # A field with declared choices — or the model catalog, for a ``ref`` — becomes an editable
-                # dropdown; the values come from the app, so nothing is hard-coded here.
-                options = choices.get(field) or (sorted(catalog) if field == "ref" and catalog else None)
-                if options:
-                    combo = qt.QComboBox()
-                    combo.setEditable(True)
-                    combo.addItems([str(option) for option in options])
-                    combo.setCurrentText(str(v))
-                    return combo, (lambda: combo.currentText)
                 w = qt.QLineEdit(str(v))
                 return w, (lambda: w.text)
             # list of scalars (or empty): comma-separated, element type inferred for the round-trip
@@ -410,22 +388,23 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
 
             return w, read_list
 
-        def render_object(obj, path):
+        def render_object(obj, cst, path):
+            cst = cst or {}
             box = qt.QWidget()
             form = qt.QFormLayout(box)
             form.setContentsMargins(0, 0, 0, 0)
             readers = {}
             for key, val in obj.items():
-                subwidget, subread = render(val, key, path + [key])
+                subwidget, subread = render(val, cst.get(key), key, path + [key])
                 form.addRow(f"{key}:", subwidget)
                 readers[key] = subread
             return box, (lambda: {key: reader() for key, reader in readers.items()})
 
-        def render_object_list(items, field, path):
-            # Structural heuristic (no field-name knowledge): objects that themselves hold a nested
-            # object-list stack VERTICALLY (they are big — e.g. resolutions holding models); leaf objects
-            # (scalars only) go SIDE BY SIDE, so a resolution's models stay compact.
-            nested = any(is_object_list(val) for item in items for val in item.values())
+        def render_object_list(items, item_cst, field, path):
+            # Structural heuristic (no field-name knowledge): objects that themselves hold a nested collection
+            # stack VERTICALLY (they are big — e.g. resolutions holding models); leaf objects (scalars only) go
+            # SIDE BY SIDE, so a resolution's models stay compact.
+            nested = any(is_object_list(val) or is_object_map(val) for item in items for val in item.values())
             box = qt.QWidget()
             layout = qt.QVBoxLayout(box) if nested else qt.QHBoxLayout(box)
             layout.setContentsMargins(0, 0, 0, 0)
@@ -435,7 +414,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
                 if not nested:
                     cell.setMinimumWidth(240)
                 cell_layout = qt.QVBoxLayout(cell)
-                subwidget, subread = render_object(item, path + [index])
+                subwidget, subread = render_object(item, item_cst, path + [index])
                 cell_layout.addWidget(subwidget)
                 remove = qt.QPushButton("✕ remove")
                 remove.clicked.connect(lambda _=0, p=path, i=index: drop(p, i))
@@ -449,17 +428,18 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
                 layout.addStretch(1)
             return box, (lambda: [reader() for reader in readers])
 
-        def render(v, field, path):
-            if is_object_list(v):
-                return render_object_list(v, field, path)
+        def render(v, cst, field, path):
+            cst = cst or {}
+            if is_repeatable(v, cst):
+                return render_object_list(items_of(v), cst.get("*", {}), field, path)
             if isinstance(v, dict):
-                return render_object(v, path)
-            return scalar_widget(v, field)
+                return render_object(v, cst, path)
+            return scalar_widget(v, cst)
 
-        def append(path):
+        def append(path, empty=None):
             state["root"] = state["read"]()
             target = navigate(state["root"], path)
-            target.append(copy.deepcopy(target[-1]) if target else {})
+            target.append(copy.deepcopy(target[-1]) if target else ({} if empty is None else empty))
             rebuild()
 
         def drop(path, index):
@@ -475,7 +455,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
                 widget = item.widget()
                 if widget is not None:
                     widget.setParent(None)
-            widget, read = render(state["root"], name, [])
+            widget, read = render(state["root"], constraint, name, [])
             state["read"] = read
             outer.addWidget(widget)
 
@@ -485,22 +465,20 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
     def _collect_param_overrides(self, param_widgets) -> dict:
         """Keep only the parameters whose edited value differs from the config default."""
         overrides: dict = {}
-        for tunable, reader in param_widgets:
+        for name, default, reader in param_widgets:
             value = reader()
-            if value is not None and value != tunable["value"]:
-                overrides[tunable["name"]] = value
+            if value is not None and value != default:
+                overrides[name] = value
         return overrides
 
     def _param_override_set_args(self) -> list[str]:
-        """The active model-parameter overrides (scalars + the resolution matrix) as ``--set`` CLI args."""
+        """The active model-parameter overrides (scalars and nested values alike) as ``--set`` CLI args."""
         args: list[str] = []
         for name, value in self._param_override.items():
             args += ["--set", f"{name}={self._format_config_value(value)}"]
-        if self._matrix_override is not None:
-            args += ["--set", f"resolutions={self._format_config_value(self._matrix_override)}"]
         return args
 
-    def _save_as_local_app(self, app, param_widgets, matrix_value, dialog) -> None:
+    def _save_as_local_app(self, app, param_widgets, dialog) -> None:
         """Export the app into a local folder with the current parameters baked in as defaults (à la fine-tune)."""
         import re
 
@@ -508,11 +486,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         from konfai_apps.app_repository import LocalAppRepositoryFromDirectory
 
         overrides = self._collect_param_overrides(param_widgets)
-        set_args = [f"{path}={self._format_config_value(value)}" for path, value in overrides.items()]
-        if matrix_value is not None:
-            matrix = matrix_value()
-            if matrix is not None:
-                set_args.append(f"resolutions={self._format_config_value(matrix)}")
+        set_args = [f"{name}={self._format_config_value(value)}" for name, value in overrides.items()]
 
         parent_dir = qt.QFileDialog.getExistingDirectory(None, "Choose parent directory for the new local app")
         if not parent_dir:
@@ -580,7 +554,6 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         self._patch_override = None
         self._batch_override = None
         self._param_override = {}
-        self._matrix_override = None
         self._refresh_advanced_button()
 
         # Uncertainty estimation availability depends on app capabilities
