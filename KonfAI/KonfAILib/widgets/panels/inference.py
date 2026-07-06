@@ -61,8 +61,11 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         self.ui.outputVolumeSelector.connect(
             "currentNodeChanged(vtkMRMLNode*)", self.template.update_parameter_node_from_gui
         )
+        # setSegmentationNode() rejects non-segmentation nodes; the output selector also holds scalar
+        # volumes (registration / synthesis outputs), so route through a type guard instead of connecting
+        # setSegmentationNode directly (which would raise TypeError on a scalar-volume output).
         self.ui.outputVolumeSelector.connect(
-            "currentNodeChanged(vtkMRMLNode*)", self.ui.segmentationShow3DButton.setSegmentationNode
+            "currentNodeChanged(vtkMRMLNode*)", self._sync_segmentation_show3d
         )
         self.ui.segmentationShow3DButton.setVisible(False)
 
@@ -119,6 +122,12 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         from konfai_apps.app_repository import current_free_vram
 
         return current_free_vram([int(d) for d in devices], remote_server)
+
+    def _sync_segmentation_show3d(self, node) -> None:
+        """Forward only segmentation nodes to the Show-3D button; a scalar-volume output would otherwise
+        raise 'method requires a vtkMRMLSegmentationNode, a vtkMRMLScalarVolumeNode was provided'."""
+        seg = node if (node is not None and node.IsA("vtkMRMLSegmentationNode")) else None
+        self.ui.segmentationShow3DButton.setSegmentationNode(seg)
 
     def on_advanced_clicked(self):
         """Open the advanced dialog: override the patch size (one spinbox per dimension) and batch size.
