@@ -36,6 +36,25 @@ if TYPE_CHECKING:
     from KonfAILib.widgets.app_template import KonfAIAppTemplateWidget
 
 
+# Visual style for the advanced-settings dialog: cards + roomy fields instead of a flat gray form.
+_ADVANCED_QSS = """
+QDialog { background: #f4f5f7; }
+QFrame#card { background: #ffffff; border: 1px solid #dfe3e8; border-radius: 8px; }
+QLabel#cardHeader { font-weight: 600; color: #2b3440; }
+QLabel#sectionHeader { font-weight: 600; color: #2b3440; }
+QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit {
+    border: 1px solid #cfd5dc; border-radius: 5px; padding: 3px 6px; background: #fff; min-height: 22px;
+}
+QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus { border: 1px solid #3b82f6; }
+QPushButton#ghost {
+    border: 1px solid #cfd5dc; border-radius: 6px; padding: 4px 12px; background: #fff; color: #2b3440;
+}
+QPushButton#ghost:hover { background: #eef2f6; }
+QPushButton#remove { border: none; color: #b64a4a; font-weight: 600; padding: 2px 8px; background: transparent; }
+QPushButton#remove:hover { color: #d33; }
+"""
+
+
 class KonfAIAppInferencePanel(KonfAIAppPanel):
     """
     Inference panel of a KonfAI application.
@@ -154,6 +173,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         # and pin the OK/Cancel box below it. A generous minimum size opens the dialog wide enough to read
         # the full title and the matrix grid without hand-resizing.
         dialog.setMinimumSize(600, 520)
+        dialog.setStyleSheet(_ADVANCED_QSS)
         outer = qt.QVBoxLayout(dialog)
         scroll = qt.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -222,7 +242,15 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
                 current = self._param_override.get(name, default)
                 widget, reader = self._build_value_editor(current, constraints.get(name), name)
                 param_widgets.append((name, default, reader))
-                form.addRow(f"{name}:", widget)
+                if isinstance(default, (dict, list)):
+                    # A nested / repeatable value (e.g. the resolutions matrix) takes the full width, its name
+                    # a section header above — no wasted label column next to a big editor.
+                    header = qt.QLabel(name)
+                    header.setObjectName("sectionHeader")
+                    form.addRow(header)
+                    form.addRow(widget)
+                else:
+                    form.addRow(f"{name}:", widget)
 
             def _on_save():
                 self._save_as_local_app(app, param_widgets, dialog)
@@ -303,6 +331,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         """
         import copy
 
+        import ctk
         import qt
 
         constraint = constraint or {}
@@ -353,6 +382,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
                 # list — e.g. a local model ref — is still allowed). The values come from the app.
                 combo = qt.QComboBox()
                 combo.setEditable(True)
+                combo.setMinimumWidth(240)  # wide enough to read a full model ref without truncation
                 combo.addItems([str(option) for option in choices])
                 combo.setCurrentText(str(v))
                 return combo, (lambda: combo.currentText)
@@ -362,6 +392,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
                 return w, (lambda: bool(w.isChecked()))
             if isinstance(v, int):
                 w = qt.QSpinBox()
+                w.setButtonSymbols(qt.QAbstractSpinBox.NoButtons)  # type the value — Qt's arrows look cramped
                 lo = int(cst["min"]) if "min" in cst else -2147483648
                 hi = int(cst["max"]) if "max" in cst else 2147483647
                 w.setRange(max(lo, -2147483648), min(hi, 2147483647))
@@ -369,6 +400,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
                 return w, (lambda: int(w.value))
             if isinstance(v, float):
                 w = qt.QDoubleSpinBox()
+                w.setButtonSymbols(qt.QAbstractSpinBox.NoButtons)
                 w.setDecimals(6)
                 w.setRange(float(cst.get("min", -1e12)), float(cst.get("max", 1e12)))
                 w.setValue(v)
@@ -405,36 +437,65 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             readers = {}
             for key, val in obj.items():
                 subwidget, subread = render(val, cst.get(key), key, path + [key])
-                form.addRow(f"{key}:", subwidget)
+                if is_repeatable(val, cst.get(key)) or isinstance(val, dict):
+                    # a nested block (e.g. a resolution's `models`) spans the full width with its key as a
+                    # header above — not a narrow ``key:`` label beside a big card.
+                    header = qt.QLabel(key)
+                    header.setObjectName("sectionHeader")
+                    form.addRow(header)
+                    form.addRow(subwidget)
+                else:
+                    form.addRow(f"{key}:", subwidget)
                 readers[key] = subread
             return box, (lambda: {key: reader() for key, reader in readers.items()})
 
         def render_object_list(items, item_cst, field, path):
             # Structural heuristic (no field-name knowledge): objects that themselves hold a nested collection
-            # stack VERTICALLY (they are big — e.g. resolutions holding models); leaf objects (scalars only) go
-            # SIDE BY SIDE, so a resolution's models stay compact.
+            # are big (e.g. resolutions holding models) -> a collapsible section each; leaf objects (scalars
+            # only, e.g. a model) -> a titled card. Both stack vertically for a clean, distinct hierarchy.
             nested = any(is_object_list(val) or is_object_map(val) for item in items for val in item.values())
             box = qt.QWidget()
-            layout = qt.QVBoxLayout(box) if nested else qt.QHBoxLayout(box)
+            layout = qt.QVBoxLayout(box)
             layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(8)
             readers = []
             for index, item in enumerate(items):
-                cell = qt.QGroupBox(f"{field} {index}")
-                if not nested:
-                    cell.setMinimumWidth(240)
-                cell_layout = qt.QVBoxLayout(cell)
                 subwidget, subread = render_object(item, item_cst, path + [index])
-                cell_layout.addWidget(subwidget)
-                remove = qt.QPushButton("✕ remove")
+                remove = qt.QPushButton("✕ remove" if nested else "✕")
+                remove.setObjectName("remove")
                 remove.clicked.connect(lambda _=0, p=path, i=index: drop(p, i))
-                cell_layout.addWidget(remove)
+                if nested:
+                    cell = ctk.ctkCollapsibleButton()
+                    cell.text = f"{field} {index}"
+                    cell_layout = qt.QVBoxLayout(cell)
+                    cell_layout.setContentsMargins(12, 8, 12, 10)
+                    remove_row = qt.QHBoxLayout()
+                    remove_row.addStretch(1)
+                    remove_row.addWidget(remove)
+                    cell_layout.addLayout(remove_row)  # top-right, just under the section title
+                    cell_layout.addWidget(subwidget)
+                else:
+                    cell = qt.QFrame()
+                    cell.setObjectName("card")
+                    cell_layout = qt.QVBoxLayout(cell)
+                    cell_layout.setContentsMargins(14, 10, 14, 12)
+                    header = qt.QHBoxLayout()
+                    title = qt.QLabel(f"{field} {index}")
+                    title.setObjectName("cardHeader")
+                    header.addWidget(title)
+                    header.addStretch(1)
+                    header.addWidget(remove)
+                    cell_layout.addLayout(header)
+                    cell_layout.addWidget(subwidget)
                 layout.addWidget(cell)
                 readers.append(subread)
-            add = qt.QPushButton("+ add")
+            add = qt.QPushButton("＋  Add")
+            add.setObjectName("ghost")
             add.clicked.connect(lambda _=0, p=path: append(p))
-            layout.addWidget(add)
-            if not nested:
-                layout.addStretch(1)
+            add_row = qt.QHBoxLayout()
+            add_row.addWidget(add)
+            add_row.addStretch(1)
+            layout.addLayout(add_row)
             return box, (lambda: [reader() for reader in readers])
 
         def render(v, cst, field, path):
