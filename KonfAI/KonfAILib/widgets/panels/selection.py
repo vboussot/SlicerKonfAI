@@ -163,20 +163,48 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
 
             # Populate the app combo box with apps found in the provided
             # Hugging Face repos or available app on remote server
+            def _is_missing_app_error(exc: Exception) -> bool:
+                """True iff the app is genuinely gone (HTTP 404 / entry-not-found), NOT a transient
+                network / offline failure. Only a genuinely-missing app is pruned from the saved list,
+                so an app you own does not vanish just because you happened to be offline."""
+                seen: set[int] = set()
+                cur: BaseException | None = exc
+                while cur is not None and id(cur) not in seen:
+                    seen.add(id(cur))
+                    if type(cur).__name__ in ("EntryNotFoundError", "RepositoryNotFoundError", "RevisionNotFoundError"):
+                        return True
+                    if getattr(getattr(cur, "response", None), "status_code", None) == 404:
+                        return True
+                    cur = cur.__cause__ or cur.__context__
+                text = str(exc).lower()
+                return any(marker in text for marker in ("404", "entry not found", "does not exist", "not found"))
+
             apps = []
+            removed_missing: list[str] = []
             sorted_apps_name = sorted(apps_name)
-            try:
-                if not sorted_apps_name:
-                    self._set_status_progress(100, "No applications found.")
-                for idx, app_name in enumerate(sorted_apps_name, start=1):
-                    self._set_status_progress(
-                        40 + int((idx / len(sorted_apps_name)) * 60),
-                        f"Initializing {app_name}...",
-                    )
+            if not sorted_apps_name:
+                self._set_status_progress(100, "No applications found.")
+            for idx, app_name in enumerate(sorted_apps_name, start=1):
+                self._set_status_progress(
+                    40 + int((idx / len(sorted_apps_name)) * 60),
+                    f"Initializing {app_name}...",
+                )
+                try:
                     apps.append(get_app_repository_info(app_name, False))
-            except Exception as e:
-                slicer.util.errorDisplay(str(e), detailedText=getattr(e, "details", None) or "")
-                return
+                except Exception as e:  # noqa: BLE001 - one bad app must not abort the whole list
+                    if _is_missing_app_error(e):
+                        # Deleted / renamed on its source (404): drop it so it stops being re-fetched.
+                        removed_missing.append(app_name)
+                        self._update_logs(f"Removed '{app_name}': no longer available on its source (404).", False)
+                    else:
+                        # Transient (offline / server down): keep it; it will resolve next time online.
+                        self._update_logs(f"Skipped '{app_name}': temporarily unreachable ({e}).", False)
+            if removed_missing:
+                self.app_local_repositoy = [n for n in self.app_local_repositoy if n not in removed_missing]
+                QSettings().setValue(
+                    f"KonfAI-Settings/{self._name}/Apps",
+                    json.dumps(self.app_local_repositoy),
+                )
 
             self._set_status_progress(100, f"Loaded {len(apps)} applications.")
 
@@ -289,11 +317,17 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         from konfai_apps.app_repository import LocalAppRepositoryFromDirectory
 
         app = self.ui.appComboBox.currentData
+        index = self.ui.appComboBox.currentIndex
+        if index < 0:
+            return
+        # A broken/unresolvable entry (e.g. its source 404'd) has no app object; fall back to the
+        # displayed label so a dead entry can still be removed instead of crashing on ``None``.
+        label = app.get_display_name() if app is not None else (self.ui.appComboBox.currentText or "this app")
 
         mb = QMessageBox()
         mb.setIcon(QMessageBox.Warning)
         mb.setWindowTitle("Remove app?")
-        mb.setText(f"Do you really want to remove “{app.get_display_name()}” from the list?")
+        mb.setText(f"Do you really want to remove “{label}” from the list?")
         mb.setInformativeText("This will remove the app entry from the extension’s list.")
         mb.setStandardButtons(QMessageBox.Yes | QMessageBox.Cancel)
         mb.setDefaultButton(QMessageBox.Cancel)
@@ -305,9 +339,14 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         if mb.exec_() != QMessageBox.Yes:
             return
 
-        index = self.ui.appComboBox.findText(app.get_display_name())
         self.ui.appComboBox.removeItem(index)
-        self.app_local_repositoy.remove(app.get_name())
+        name = app.get_name() if app is not None else None
+        if name is not None and name in self.app_local_repositoy:
+            self.app_local_repositoy.remove(name)
+        QSettings().setValue(
+            f"KonfAI-Settings/{self._name}/Apps",
+            json.dumps(self.app_local_repositoy),
+        )
 
         if chk.isChecked():
             if isinstance(app, LocalAppRepositoryFromDirectory):
