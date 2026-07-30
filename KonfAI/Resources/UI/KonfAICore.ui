@@ -3,6 +3,18 @@
    <class>KonfAIWidget</class>
    <widget class="qMRMLWidget" name="KonfAICoreWidget">
       <layout class="QVBoxLayout" name="verticalLayout_root">
+         <property name="leftMargin">
+            <number>10</number>
+         </property>
+         <property name="topMargin">
+            <number>6</number>
+         </property>
+         <property name="rightMargin">
+            <number>10</number>
+         </property>
+         <property name="bottomMargin">
+            <number>6</number>
+         </property>
          <item>
             <widget class="QWidget" name="headerWidget">
                <property name="sizePolicy">
@@ -31,6 +43,22 @@
                      </widget>
                   </item>
                   <item>
+                     <widget class="QLabel" name="headerLogoLabel">
+                        <property name="sizePolicy">
+                           <sizepolicy hsizetype="Maximum" vsizetype="Preferred">
+                              <horstretch>0</horstretch>
+                              <verstretch>0</verstretch>
+                           </sizepolicy>
+                        </property>
+                        <property name="text">
+                           <string />
+                        </property>
+                        <property name="alignment">
+                           <set>Qt::AlignLeft|Qt::AlignVCenter</set>
+                        </property>
+                     </widget>
+                  </item>
+                  <item>
                      <widget class="QLabel" name="headerTitleLabel">
                         <property name="text">
                            <string />
@@ -51,6 +79,17 @@
                         </property>
                         <property name="frameShadow">
                            <enum>QFrame::Sunken</enum>
+                        </property>
+                     </widget>
+                  </item>
+                  <!-- Studio launcher: last on the row, after the rule -->
+                  <item>
+                     <widget class="QToolButton" name="studioButton">
+                        <property name="toolTip">
+                           <string>Open KonfAI Studio (local web app) in your browser; starts its server if needed.</string>
+                        </property>
+                        <property name="text">
+                           <string />
                         </property>
                      </widget>
                   </item>
@@ -176,6 +215,13 @@
                      <property name="value">
                         <number>0</number>
                      </property>
+                     <property name="minimumHeight">
+                        <number>16</number>
+                     </property>
+                     <property name="styleSheet">
+                        <string notr="true">QProgressBar { border: 1px solid rgba(128,128,128,0.35); border-radius: 4px; text-align: center; font-size: 10px; background: rgba(128,128,128,0.12); }
+QProgressBar::chunk { background-color: #3b82f6; border-radius: 3px; }</string>
+                     </property>
                   </widget>
                </item>
                <item>
@@ -237,80 +283,87 @@
             </layout>
          </item>
          <item>
-            <layout class="QVBoxLayout" name="ramLayout">
+            <layout class="QHBoxLayout" name="resourcesLayout">
                <property name="spacing">
-                  <number>2</number>
+                  <number>12</number>
                </property>
                <item>
-                  <widget class="QLabel" name="ramLabel">
-                     <property name="text">
-                        <string>RAM: 0.0G / 0.0G</string>
+                  <layout class="QVBoxLayout" name="ramLayout">
+                     <property name="spacing">
+                        <number>2</number>
                      </property>
-                     <property name="alignment">
-                        <set>Qt::AlignLeft|Qt::AlignVCenter</set>
-                     </property>
-                     <property name="styleSheet">
-                        <string notr="true">font-size:10px; color:gray;</string>
-                     </property>
-                  </widget>
+                     <item>
+                        <widget class="QLabel" name="ramLabel">
+                           <property name="text">
+                              <string>RAM: 0.0G / 0.0G</string>
+                           </property>
+                           <property name="alignment">
+                              <set>Qt::AlignLeft|Qt::AlignVCenter</set>
+                           </property>
+                           <property name="styleSheet">
+                              <string notr="true">font-size:10px; color:gray;</string>
+                           </property>
+                        </widget>
+                     </item>
+                     <item>
+                        <widget class="QProgressBar" name="ramProgressBar">
+                           <property name="minimum">
+                              <number>0</number>
+                           </property>
+                           <property name="maximum">
+                              <number>100</number>
+                           </property>
+                           <property name="value">
+                              <number>0</number>
+                           </property>
+                           <property name="textVisible">
+                              <bool>false</bool>
+                           </property>
+                           <property name="maximumHeight">
+                              <number>6</number>
+                           </property>
+                        </widget>
+                     </item>
+                  </layout>
                </item>
                <item>
-                  <widget class="QProgressBar" name="ramProgressBar">
-                     <property name="minimum">
-                        <number>0</number>
+                  <layout class="QVBoxLayout" name="vramLayout">
+                     <property name="spacing">
+                        <number>2</number>
                      </property>
-                     <property name="maximum">
-                        <number>100</number>
-                     </property>
-                     <property name="value">
-                        <number>0</number>
-                     </property>
-                     <property name="textVisible">
-                        <bool>false</bool>
-                     </property>
-                     <property name="maximumHeight">
-                        <number>6</number>
-                     </property>
-                  </widget>
-               </item>
-            </layout>
-         </item>
-         <item>
-            <layout class="QVBoxLayout" name="vramLayout">
-               <property name="spacing">
-                  <number>2</number>
-               </property>
-               <item>
-                  <widget class="QLabel" name="gpuLabel">
-                     <property name="text">
-                        <string>VRAM: 0.0G / 0.0G</string>
-                     </property>
-                     <property name="alignment">
-                        <set>Qt::AlignLeft|Qt::AlignVCenter</set>
-                     </property>
-                     <property name="styleSheet">
-                        <string notr="true">font-size:10px; color:gray;</string>
-                     </property>
-                  </widget>
-               </item>
-               <item>
-                  <widget class="QProgressBar" name="gpuProgressBar">
-                     <property name="minimum">
-                        <number>0</number>
-                     </property>
-                     <property name="maximum">
-                        <number>100</number>
-                     </property>
-                     <property name="value">
-                        <number>0</number>
-                     </property>
-                     <property name="textVisible">
-                        <bool>false</bool>
-                     </property>
-                     <property name="maximumHeight">
-                        <number>6</number>
-                     </property>
-                  </widget>
+                     <item>
+                        <widget class="QLabel" name="gpuLabel">
+                           <property name="text">
+                              <string>VRAM: 0.0G / 0.0G</string>
+                           </property>
+                           <property name="alignment">
+                              <set>Qt::AlignLeft|Qt::AlignVCenter</set>
+                           </property>
+                           <property name="styleSheet">
+                              <string notr="true">font-size:10px; color:gray;</string>
+                           </property>
+                        </widget>
+                     </item>
+                     <item>
+                        <widget class="QProgressBar" name="gpuProgressBar">
+                           <property name="minimum">
+                              <number>0</number>
+                           </property>
+                           <property name="maximum">
+                              <number>100</number>
+                           </property>
+                           <property name="value">
+                              <number>0</number>
+                           </property>
+                           <property name="textVisible">
+                              <bool>false</bool>
+                           </property>
+                           <property name="maximumHeight">
+                              <number>6</number>
+                           </property>
+                        </widget>
+                     </item>
+                  </layout>
                </item>
             </layout>
          </item>
@@ -322,6 +375,9 @@
                </property>
                <property name="placeholderText">
                   <string>Logs…</string>
+               </property>
+               <property name="maximumBlockCount">
+                  <number>5000</number>
                </property>
             </widget>
          </item>

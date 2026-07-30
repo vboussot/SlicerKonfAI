@@ -19,16 +19,21 @@ device selection, RAM/VRAM monitoring, logs/progress, app registration."""
 
 import itertools
 import json
+import os
 from typing import Any
 
 import slicer
 import vtk
 from qt import (
+    QCursor,
     QDialog,
     QIcon,
     QSettings,
+    QMenu,
     QSize,
+    Qt,
     QTabWidget,
+    QTimer,
     QVBoxLayout,
     QWidget,
 )
@@ -41,7 +46,16 @@ from KonfAILib.logic.servers import RemoteServer
 from KonfAILib.platform_utils import open_path_in_file_browser
 from KonfAILib.widgets.app_template import AppTemplateWidget
 from KonfAILib.widgets.dialogs.remote_server import RemoteServerAddDialog, RemoteServerConfigDialog
-from KonfAILib.widgets.helpers import resource_path
+from KonfAILib.widgets.helpers import is_dark_theme, resource_path, slicer_wait_popup
+
+
+def _resource_bar_qss(usage: float) -> str:
+    """Flat rounded gauge for the thin RAM/VRAM bars; the chunk turns red above 80% usage."""
+    color = "#e74c3c" if usage > 0.8 else "#2ecc71"
+    return (
+        "QProgressBar { border: none; background: rgba(128,128,128,0.18); border-radius: 3px; }"
+        f"QProgressBar::chunk {{ background-color: {color}; border-radius: 3px; }}"
+    )
 
 
 class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic):
@@ -76,11 +90,28 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         # Load the main KonfAICore UI from .ui file
         ui_widget = slicer.util.loadUI(resource_path("UI/KonfAICore.ui"))
         self.setLayout(QVBoxLayout())
+        # The .ui root layout already carries the margins; a second layer here doubles every gap
+        # (header-to-content in particular).
+        self.layout().setContentsMargins(0, 0, 0, 0)
         self.layout().addWidget(ui_widget)
         self.ui = slicer.util.childWidgetVariables(ui_widget)
         self.initialize_parameter_node()
-        # Set header title
-        self.ui.headerTitleLabel.text = title
+        # Quiet header, one language for every extension: the title in spaced small caps between
+        # the two native thin rules, with the Studio launcher closing the row.
+        self.ui.headerLogoLabel.hide()
+        self.ui.headerTitleLabel.text = title.upper()
+        self.ui.headerTitleLabel.setStyleSheet(
+            "background: transparent; font-weight: 700; font-size: 12px; letter-spacing: 2px;"
+            " color: rgba(128,144,160,0.95); padding: 0 6px;"
+        )
+
+        # Console-style log area, matched to the theme. A full widget stylesheet is required either
+        # way: font-only styling makes the widget drop the theme palette and render white in dark mode.
+        log_bg, log_fg = ("#1f2123", "#d8dadc") if is_dark_theme() else ("#fbfcfd", "#2b3440")
+        self.ui.logText.setStyleSheet(
+            f"QPlainTextEdit {{ background-color: {log_bg}; color: {log_fg}; font-family: monospace;"
+            " font-size: 11px; border: 1px solid rgba(128,128,128,0.35); border-radius: 4px; }"
+        )
 
         # Observe scene close/open to keep parameter node in sync
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.StartCloseEvent, self.on_scene_start_close)
@@ -100,11 +131,195 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         self.ui.remoteServerAddButton.clicked.connect(self.on_add_remote_server)
         self.ui.remoteServerComboBox.currentIndexChanged.connect(self.on_remote_server_changed)
 
+        # Studio launcher: a small flat robot icon button, same language as the module's other icon
+        # buttons. A right-click menu offers to stop the detached server (no terminal to Ctrl+C).
+        self.ui.studioButton.setIcon(QIcon(resource_path("Icons/studio.png")))
+        self.ui.studioButton.setIconSize(QSize(22, 22))
+        self.ui.studioButton.setAutoRaise(True)
+        self.ui.studioButton.setCursor(QCursor(Qt.PointingHandCursor))
+        self.ui.studioButton.clicked.connect(self.on_open_studio)
+        studio_menu = QMenu(self.ui.studioButton)
+        studio_menu.addAction("Stop the Studio server", self.on_stop_studio)
+        studio_menu.addAction("Choose Studio executable…", self.on_choose_studio_executable)
+        self.ui.studioButton.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.ui.studioButton.customContextMenuRequested.connect(
+            lambda pos: studio_menu.exec_(self.ui.studioButton.mapToGlobal(pos))
+        )
+
         self.ui.deviceComboBox.currentIndexChanged.connect(self.on_device_changed)
+
+        # Idle refresh of the RAM/VRAM gauges: log lines only update them during a run, so a timer
+        # keeps them live in between. Started on enter() and stopped on exit(), so nothing polls
+        # (locally or on a remote server) while the module is not shown.
+        self._resources_timer = QTimer(self)
+        self._resources_timer.setInterval(3000)
+        self._resources_timer.timeout.connect(self._update_resources)
         self.ui.remoteServerComboBox.setStyleSheet("""
             QComboBox[status="ok"]  { color: rgb(0,160,0); }
             QComboBox[status="bad"] { color: rgb(200,0,0); }
             """)
+
+    def on_choose_studio_executable(self) -> None:
+        """Pin a specific ``konfai-studio`` executable (e.g. a venv/pixi one) over the auto-detected one."""
+        from qt import QFileDialog
+
+        current = self._studio_executable() or os.path.expanduser("~")
+        path = QFileDialog.getOpenFileName(self, "Select the konfai-studio executable", current)
+        if not path or not os.path.isfile(path):
+            return
+        QSettings().setValue("KonfAI-Settings/StudioExecutable", path)
+        self.update_logs(f"[KonfAI] Studio executable set to {path}", False)
+
+    def on_stop_studio(self) -> None:
+        """Ask the local Studio server to shut down (it runs detached, so there is no terminal)."""
+        import urllib.request
+
+        if not self._studio_answers():
+            self.update_logs("[KonfAI] Studio is not running.", False)
+            return
+        try:
+            urllib.request.urlopen(
+                urllib.request.Request("http://127.0.0.1:8730/api/quit", method="POST"), timeout=3
+            )
+            self.update_logs("[KonfAI] Studio server stopped.", False)
+        except Exception as exc:  # noqa: BLE001 - surfaced in the log, nothing else to do
+            self.update_logs(f"[KonfAI] Could not stop Studio: {exc}", False)
+
+    def _studio_answers(self) -> bool:
+        import socket
+
+        with socket.socket() as probe:
+            probe.settimeout(0.25)
+            return probe.connect_ex(("127.0.0.1", 8730)) == 0
+
+    def _studio_env(self, executable: str) -> dict:
+        """The environment to launch the Studio server with.
+
+        A konfai-studio installed INSIDE Slicer's Python must keep Slicer's runtime variables: its
+        shebang runs ``python-real``, which needs Slicer's LD_LIBRARY_PATH just to load libpython.
+        One installed OUTSIDE (pipx, venv, pixi) gets the user's pre-Slicer environment instead
+        (``startupEnvironment()``), so Slicer's rewritten libs do not leak into it. Either way,
+        ``~/.local/bin`` joins the PATH: that is where the ``claude`` CLI — Studio's default
+        brain — lives, and Slicer's PATH rewrite is exactly what hid it.
+        """
+        inside_slicer = executable.startswith(slicer.app.slicerHome)
+        env = dict(os.environ) if inside_slicer else dict(slicer.util.startupEnvironment())
+        user_bin = os.path.expanduser("~/.local/bin")
+        path = env.get("PATH", "")
+        if user_bin not in path.split(os.pathsep):
+            env["PATH"] = f"{path}{os.pathsep}{user_bin}" if path else user_bin
+        return env
+
+    def _studio_executable(self) -> str | None:
+        """The ``konfai-studio`` CLI: the user-remembered path first, then PATH, then ~/.local/bin,
+        then Slicer's own scripts directory (not on PATH — where the one-click install puts it)."""
+        import shutil
+        import sysconfig
+
+        stored = QSettings().value("KonfAI-Settings/StudioExecutable")
+        if stored and os.path.isfile(stored):
+            return str(stored)
+        scripts = sysconfig.get_path("scripts")
+        candidates = [
+            shutil.which("konfai-studio"),
+            os.path.expanduser("~/.local/bin/konfai-studio"),
+            os.path.join(scripts, "konfai-studio"),
+            os.path.join(scripts, "konfai-studio.exe"),
+        ]
+        return next((c for c in candidates if c and os.path.isfile(c)), None)
+
+    def on_open_studio(self) -> None:
+        """Open KonfAI Studio in the browser; asks before starting its local server when none runs.
+
+        The server (loopback, port 8730) is launched detached, so it survives Slicer. When the CLI
+        is not on Slicer's PATH (e.g. it lives in a virtualenv/pixi env), the user can locate the
+        executable once; the choice is remembered in the settings.
+        """
+        import subprocess
+        import time
+
+        from qt import QDesktopServices, QFileDialog, QMessageBox, QUrl
+
+        if self._studio_answers():
+            self.update_logs("[KonfAI] Studio is already running — opening http://127.0.0.1:8730", False)
+            QDesktopServices.openUrl(QUrl("http://127.0.0.1:8730"))
+            return
+
+        if (
+            QMessageBox.question(
+                self,
+                "Launch KonfAI Studio?",
+                "KonfAI Studio is the local web app for designing and running experiments.\n\n"
+                "This will start its server on this machine (127.0.0.1:8730, not exposed to the\n"
+                "network) and open it in your default browser. The server keeps running in the\n"
+                "background after Slicer closes.\n\nLaunch it now?",
+                QMessageBox.Yes | QMessageBox.Cancel,
+                QMessageBox.Yes,
+            )
+            != QMessageBox.Yes
+        ):
+            return
+
+        executable = self._studio_executable()
+        if executable is None:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Question)
+            box.setWindowTitle("Install KonfAI Studio?")
+            box.setText("KonfAI Studio is not installed yet.")
+            box.setInformativeText(
+                "Install it now (one click, about a minute)?\n\n"
+                "Developers can instead locate an existing 'konfai-studio' executable "
+                "(e.g. inside a virtualenv or pixi environment)."
+            )
+            install = box.addButton("Install", QMessageBox.AcceptRole)
+            locate = box.addButton("Locate…", QMessageBox.ActionRole)
+            box.addButton(QMessageBox.Cancel)
+            box.exec_()
+            if box.clickedButton() == install:
+                with slicer_wait_popup("KonfAI Studio", "Installing konfai-studio..."):
+                    slicer.util.pip_install("konfai-studio")
+                executable = self._studio_executable()
+                if executable is None:
+                    QMessageBox.warning(
+                        self,
+                        "KonfAI Studio",
+                        "The install finished but the 'konfai-studio' command was not found.",
+                    )
+                    return
+            elif box.clickedButton() == locate:
+                path = QFileDialog.getOpenFileName(
+                    self, "Select the konfai-studio executable", os.path.expanduser("~")
+                )
+                if not path or not os.path.isfile(path):
+                    return
+                QSettings().setValue("KonfAI-Settings/StudioExecutable", path)
+                executable = path
+            else:
+                return
+
+        self.update_logs(f"[KonfAI] Starting Studio: {executable}", False)
+        subprocess.Popen(  # noqa: S603 - launching the user's own CLI, detached on purpose
+            [executable],
+            env=self._studio_env(executable),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        for _ in range(32):  # give uvicorn a moment to bind before the browser tab loads
+            if self._studio_answers():
+                break
+            slicer.app.processEvents()
+            time.sleep(0.25)
+        else:
+            QMessageBox.warning(
+                self,
+                "KonfAI Studio",
+                "The Studio server did not answer on 127.0.0.1:8730 after 8 seconds.\n"
+                "Run 'konfai-studio' in a terminal to see why it fails.",
+            )
+            return
+        self.update_logs("[KonfAI] Studio started — opening http://127.0.0.1:8730", False)
+        QDesktopServices.openUrl(QUrl("http://127.0.0.1:8730"))
 
     def _set_remote_server_item_color(self, ok: bool) -> None:
         combo = self.ui.remoteServerComboBox
@@ -363,6 +578,10 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
             if not opened:
                 slicer.util.errorDisplay(f"Could not open folder:\n{work_dir}", detailedText=error or "")
 
+    def _update_resources(self) -> None:
+        self._update_ram()
+        self._update_vram()
+
     def _update_ram(self) -> None:
         """
         Update the RAM usage display and progress bar.
@@ -376,21 +595,7 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
 
         self.ui.ramLabel.text = _("RAM used: {used:.1f} GB / {total:.1f} GB").format(used=used_gb, total=total_gb)
         self.ui.ramProgressBar.value = used_gb / total_gb * 100
-
-        if used_gb / total_gb * 100 > 80:
-            # Red when RAM usage is high
-            self.ui.ramProgressBar.setStyleSheet("""
-                QProgressBar::chunk {
-                    background-color: #e74c3c;
-                }
-            """)
-        else:
-            # Green otherwise
-            self.ui.ramProgressBar.setStyleSheet("""
-                QProgressBar::chunk {
-                    background-color: #2ecc71; 
-                }
-            """)  # noqa: W291
+        self.ui.ramProgressBar.setStyleSheet(_resource_bar_qss(used_gb / total_gb))
 
     def _update_vram(self) -> None:
         """
@@ -410,20 +615,7 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
             self.ui.gpuProgressBar.show()
             self.ui.gpuLabel.text = _("VRAM used: {used:.1f} GB / {total:.1f} GB").format(used=used_gb, total=total_gb)
             self.ui.gpuProgressBar.value = used_gb / total_gb * 100
-
-            if used_gb / total_gb * 100 > 80:
-                self.ui.gpuProgressBar.setStyleSheet("""
-                    QProgressBar::chunk {
-                        background-color: #e74c3c;
-                    }
-                """)
-            else:
-                # Green otherwise
-                self.ui.gpuProgressBar.setStyleSheet("""
-                    QProgressBar::chunk {
-                        background-color: #2ecc71;
-                    }
-                """)
+            self.ui.gpuProgressBar.setStyleSheet(_resource_bar_qss(used_gb / total_gb))
         else:
             # Hide VRAM widgets when CPU is selected
             self.ui.gpuLabel.hide()
@@ -436,8 +628,7 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         RAM and VRAM usage are updated at the same time, so the user always
         has an up-to-date view of system resources during processing.
         """
-        self._update_ram()
-        self._update_vram()
+        self._update_resources()
         if clear:
             self.ui.logText.plainText = text
         else:
@@ -479,6 +670,7 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         Delegates cleanup to each registered KonfAI app (e.g., to remove
         temporary working directories).
         """
+        self._resources_timer.stop()
         self.removeObservers()
 
         settings = QSettings()
@@ -539,6 +731,10 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         if self._current_konfai_app:
             self._current_konfai_app.enter()
 
+        self._update_resources()
+        self._resources_timer.start()
+
     def exit(self) -> None:  # noqa: A003
+        self._resources_timer.stop()
         if self._current_konfai_app:
             self._current_konfai_app.exit()
