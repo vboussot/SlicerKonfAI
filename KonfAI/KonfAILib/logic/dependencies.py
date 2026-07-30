@@ -20,6 +20,7 @@ import json
 import urllib.request
 
 import slicer
+from packaging.version import Version
 
 
 def get_latest_pypi_version(package: str, timeout_s: float = 5.0) -> str | None:
@@ -43,24 +44,6 @@ def get_installed_version(package: str) -> str | None:
         return version(package)
     except Exception:
         return None
-
-
-def is_editable_install(package: str) -> bool:
-    """
-    Return True if `package` is installed in editable/development mode (``pip install -e``).
-
-    A developer working from a local checkout owns their environment; SlicerKonfAI must not
-    downgrade or reinstall over an editable install (which would clobber unreleased changes).
-    """
-    try:
-        from importlib.metadata import distribution
-
-        raw = distribution(package).read_text("direct_url.json")
-        if not raw:
-            return False
-        return bool(json.loads(raw).get("dir_info", {}).get("editable", False))
-    except Exception:
-        return False
 
 
 def install_torch() -> bool:
@@ -90,20 +73,15 @@ def install_torch() -> bool:
 def install_package(package: str, display_name: str) -> bool:
     """Ensure ``package`` (pinned to its latest PyPI release) is installed in Slicer's Python.
 
-    An editable/development install is respected and never downgraded. Returns True when the package is
-    available (installed now or already present), False when the user declined a required install. This is
-    the shared installer used by every KonfAI-based extension (KonfAI, IMPACT-Reg, …); the released
-    ``package`` pins its own matching ``konfai``/``konfai-apps`` versions, so installing it pulls the stack.
+    Returns True when the package is available (installed now or already present), False when the user
+    declined a required install. This is the shared installer used by every KonfAI-based extension
+    (KonfAI, IMPACT-Reg, …); the released ``package`` pins its own matching ``konfai``/``konfai-apps``
+    versions, so installing it pulls the stack.
     """
     # Deferred import: keeps the logic package importable without pulling Qt widgets at module load.
     from KonfAILib.widgets.helpers import ask_user_to_install_dependency, slicer_wait_popup
 
     installed = get_installed_version(package)
-
-    if installed is not None and is_editable_install(package):
-        print(f"[{display_name}] editable install detected ({installed}) -> respecting development environment.")
-        return True
-
     latest = get_latest_pypi_version(package)
 
     if latest is None:
@@ -134,7 +112,7 @@ def install_package(package: str, display_name: str) -> bool:
             slicer.util.pip_install(f"{package}=={latest}")
         return True
 
-    if installed != latest:
+    if Version(latest) > Version(installed):
         if not ask_user_to_install_dependency(
             display_name,
             f"A newer {display_name} version is available.\n"
@@ -154,10 +132,6 @@ def install_package(package: str, display_name: str) -> bool:
 def install_konfai() -> bool:
     if not install_package("konfai-apps", "KonfAI"):
         return False
-    # A development checkout is trusted as-is (mirrors install_package's editable short-circuit).
-    if is_editable_install("konfai-apps"):
-        return True
-
     # Deferred import: keeps the logic package importable without pulling Qt widgets at module load.
     from KonfAILib.widgets.helpers import ask_user_to_install_dependency, slicer_wait_popup
 
