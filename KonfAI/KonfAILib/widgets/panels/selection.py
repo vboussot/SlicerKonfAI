@@ -29,25 +29,43 @@ import slicer
 from qt import (
     QCheckBox,
     QCursor,
+    QEvent,
     QFileDialog,
     QIcon,
     QInputDialog,
     QLineEdit,
     QMenu,
     QMessageBox,
+    QObject,
     QSettings,
     QSize,
+    Qt,
 )
 from slicer.i18n import tr as _
 
 from KonfAILib.logic.hf import get_hf_app_file_list
 from KonfAILib.platform_utils import open_path_in_file_browser
 from KonfAILib.widgets.dialogs.download_files import DownloadFilesDialog
-from KonfAILib.widgets.helpers import resource_path
+from KonfAILib.widgets.helpers import app_task_icon, resource_path
 from KonfAILib.widgets.panels.base import KonfAIAppPanel
 
 if TYPE_CHECKING:
     from KonfAILib.widgets.app_template import KonfAIAppTemplateWidget
+
+
+class _ClickToggleFilter(QObject):
+    """Run a callback on left-click release; stays quiet while a link is hovered, so the
+    links inside the description keep opening normally instead of toggling the card."""
+
+    def __init__(self, on_click, parent=None) -> None:
+        super().__init__(parent)
+        self._on_click = on_click
+        self.hovering_link = False
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt virtual
+        if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton and not self.hovering_link:
+            self._on_click()
+        return False
 
 
 class KonfAIAppSelectionPanel(KonfAIAppPanel):
@@ -75,8 +93,16 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         self.ui.refreshAppsListButton.setIconSize(QSize(18, 18))
         self.ui.refreshAppsListButton.clicked.connect(self.on_refresh_app)
 
-        # Description toggle and app selection changes
-        self.ui.toggleDescriptionButton.clicked.connect(self.on_toggle_description)
+        # The description card itself toggles between short and full text on click
+        self._description_click = _ClickToggleFilter(self.on_toggle_description, self)
+        self.ui.descriptionCard.installEventFilter(self._description_click)
+        self.ui.appDescriptionLabel.installEventFilter(self._description_click)
+        self.ui.appDescriptionLabel.linkHovered.connect(
+            lambda link: setattr(self._description_click, "hovering_link", bool(link))
+        )
+        self.ui.descriptionCard.setCursor(QCursor(Qt.PointingHandCursor))
+        self.ui.descriptionCard.toolTip = _("Click to expand or collapse the description.")
+
         self.ui.appComboBox.currentIndexChanged.connect(self.on_app_selected)
 
         self.app_local_repositoy: list[str] = []
@@ -211,7 +237,7 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         was_blocked = self.ui.appComboBox.blockSignals(True)
         self.ui.appComboBox.clear()
         for app in apps:
-            self.ui.appComboBox.addItem(app.get_display_name(), app)
+            self.ui.appComboBox.addItem(app_task_icon(app), app.get_display_name(), app)
         app_param = self.get_parameter("App")
         index = 0
         for i in range(self.ui.appComboBox.count):
@@ -300,10 +326,8 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
 
         if self._description_expanded:
             self.ui.appDescriptionLabel.setText(app.get_description())
-            self.ui.toggleDescriptionButton.setText("Less ▲")
         else:
             self.ui.appDescriptionLabel.setText(app.get_short_description())
-            self.ui.toggleDescriptionButton.setText("More ▼")
 
         self._description_expanded = not self._description_expanded
 
@@ -489,7 +513,7 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
                 f'The app "{app.get_display_name()}" is already in the list.',
             )
             return
-        self.ui.appComboBox.addItem(app.get_display_name(), app)
+        self.ui.appComboBox.addItem(app_task_icon(app), app.get_display_name(), app)
         self.ui.appComboBox.setCurrentIndex(self.ui.appComboBox.findData(app))
         self.app_local_repositoy.append(app.get_name())
 
@@ -617,7 +641,7 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
                 )
                 return
 
-            self.ui.appComboBox.addItem(app.get_display_name(), app)
+            self.ui.appComboBox.addItem(app_task_icon(app), app.get_display_name(), app)
             self.ui.appComboBox.setCurrentIndex(self.ui.appComboBox.findData(app))
             self.app_local_repositoy.append(app.get_name())
 
@@ -681,7 +705,7 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         app.install_fine_tune("Config.yml", Path(parent_dir) / name, display_name, epochs, it_validation, [])
         # Add the folder to the app combo box
         app_ft = LocalAppRepositoryFromDirectory(Path(parent_dir), name)
-        self.ui.appComboBox.addItem(app_ft.get_display_name(), app_ft)
+        self.ui.appComboBox.addItem(app_task_icon(app_ft), app_ft.get_display_name(), app_ft)
         self.ui.appComboBox.setCurrentIndex(self.ui.appComboBox.findData(app_ft))
         self.app_local_repositoy.append(app_ft.get_name())
 

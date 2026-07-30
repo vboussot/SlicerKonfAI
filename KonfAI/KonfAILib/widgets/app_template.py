@@ -34,7 +34,7 @@ from slicer.i18n import tr as _
 from KonfAILib.logic.mrml import has_node_content
 from KonfAILib.logic.process import Process
 from KonfAILib.logic.servers import RemoteServer
-from KonfAILib.widgets.helpers import resource_path
+from KonfAILib.widgets.helpers import resource_path, set_run_button_running, style_run_button
 from KonfAILib.widgets.panels.inference import KonfAIAppInferencePanel
 from KonfAILib.widgets.panels.qa import KonfAIAppQAPanel
 from KonfAILib.widgets.panels.selection import KonfAIAppSelectionPanel
@@ -61,6 +61,8 @@ class AppTemplateWidget(QWidget):
         self._name = name
 
         self.setLayout(QVBoxLayout())
+        # The enclosing core layout already carries the margins; a second layer here doubles every gap.
+        self.layout().setContentsMargins(0, 0, 0, 0)
         self.layout().addWidget(ui_widget)
         self.ui = slicer.util.childWidgetVariables(ui_widget)
 
@@ -372,6 +374,10 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         # so the synchronization methods kept on the template work unchanged.
         self.ui = slicer.util.childWidgetVariables(self)
 
+        # The two Run buttons are the primary actions of the panel: accent style, red in Stop state.
+        style_run_button(self.ui.runInferenceButton)
+        style_run_button(self.ui.runEvaluationButton)
+
     @property
     def app_local_repositoy(self) -> list[str]:
         """Compatibility accessor: the state lives on the selection panel."""
@@ -489,8 +495,11 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         self.ui.inputVolumeSequenceSelector.setCurrentNode(self.get_parameter_node("InputVolumeSequence"))
 
     def update_gui_from_parameter_node(self) -> None:
-        # Update run/stop label based on running state
-        if not self.is_running():
+        # Update run/stop label and color based on running state
+        running = self.is_running()
+        set_run_button_running(self.ui.runInferenceButton, running)
+        set_run_button_running(self.ui.runEvaluationButton, running)
+        if not running:
             self.ui.runInferenceButton.text = "Run"
             self.ui.runEvaluationButton.text = "Run"
             self.ui.configButton.enabled = True
@@ -506,17 +515,18 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
         This includes enabling/disabling buttons, updating tooltips and
         configuring default output volume names.
         """
+        # No checkpoint requirement here: an app may declare no model at all (registration presets ship
+        # ``models: []``), and missing checkpoint files are downloaded at run time (``--download``).
         input_volume = self.get_parameter_node("InputVolume")
         if (
             has_node_content(input_volume)
             and self.ui.appComboBox.currentData
-            and len(self.ui.appComboBox.currentData.get_checkpoints_name()) > 0
             and self.inference_panel.required_inputs_ok()
         ):
             self.ui.runInferenceButton.toolTip = _("Start inference")
             self.ui.runInferenceButton.enabled = True
         else:
-            self.ui.runInferenceButton.toolTip = _("Select input volume")
+            self.ui.runInferenceButton.toolTip = _("Select the required input volumes")
             self.ui.runInferenceButton.enabled = False
 
         inference_stack_volume = self.get_parameter_node("InputVolumeSequence")

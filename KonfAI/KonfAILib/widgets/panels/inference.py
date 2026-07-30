@@ -28,31 +28,12 @@ import slicer
 from slicer.i18n import tr as _
 
 from KonfAILib.logic.servers import RemoteServer
-from KonfAILib.widgets import io_selectors
+from KonfAILib.widgets import helpers, io_selectors
 from KonfAILib.widgets.chip_selector import ChipSelector
 from KonfAILib.widgets.panels.base import KonfAIAppPanel
 
 if TYPE_CHECKING:
     from KonfAILib.widgets.app_template import KonfAIAppTemplateWidget
-
-
-# Visual style for the advanced-settings dialog: cards + roomy fields instead of a flat gray form.
-_ADVANCED_QSS = """
-QDialog { background: #f4f5f7; }
-QFrame#card { background: #ffffff; border: 1px solid #dfe3e8; border-radius: 8px; }
-QLabel#cardHeader { font-weight: 600; color: #2b3440; }
-QLabel#sectionHeader { font-weight: 600; color: #2b3440; }
-QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit {
-    border: 1px solid #cfd5dc; border-radius: 5px; padding: 3px 6px; background: #fff; min-height: 22px;
-}
-QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus { border: 1px solid #3b82f6; }
-QPushButton#ghost {
-    border: 1px solid #cfd5dc; border-radius: 6px; padding: 4px 12px; background: #fff; color: #2b3440;
-}
-QPushButton#ghost:hover { background: #eef2f6; }
-QPushButton#remove { border: none; color: #b64a4a; font-weight: 600; padding: 2px 8px; background: transparent; }
-QPushButton#remove:hover { color: #d33; }
-"""
 
 
 class KonfAIAppInferencePanel(KonfAIAppPanel):
@@ -103,6 +84,9 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         self.ui.runInferenceButton.clicked.connect(self.on_run_inference_button)
 
         self.ui.uncertaintyCheckBox.toggled.connect(self.on_uncertainty_toggled)
+        # Uncertainty capability of the current app; the checkbox itself only shows when the run is
+        # actually sampled several times (see _update_uncertainty_visibility).
+        self._has_uncertainty = False
 
         self.chip_selector = ChipSelector(
             self.ui.checkpointsComboBox,
@@ -112,17 +96,33 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             on_change=self.on_checkpoint_selected_change,
         )
 
+    def _update_uncertainty_visibility(self) -> None:
+        """Show the Uncertainty checkbox only when there is a spread to measure: several
+        checkpoints/presets selected, or TTA / MC-dropout passes, on an app that supports it."""
+        multi_sample = (
+            len(self.chip_selector.selected()) > 1
+            or self.ui.ttaSpinBox.value > 0
+            or self.ui.mcDropoutSpinBox.value > 0
+        )
+        visible = multi_sample and self._has_uncertainty
+        self.ui.uncertaintyCheckBox.setVisible(visible)
+        if not visible and self.ui.uncertaintyCheckBox.isChecked():
+            self.ui.uncertaintyCheckBox.setChecked(False)
+
     def on_uncertainty_toggled(self, checked: bool) -> None:
         self.set_parameter("uncertainty", str(checked))
 
     def on_checkpoint_selected_change(self, checkpoints_selected: list[str]):
         self.set_parameter("checkpoints_name", ",".join(checkpoints_selected))
+        self._update_uncertainty_visibility()
 
     def on_tta_changed(self):
         self.set_parameter("number_of_tta", str(self.ui.ttaSpinBox.value))
+        self._update_uncertainty_visibility()
 
     def on_mc_dropout_changed(self):
         self.set_parameter("number_of_mc_dropout", str(self.ui.mcDropoutSpinBox.value))
+        self._update_uncertainty_visibility()
 
     def _current_free_vram(self) -> float | None:
         """Free VRAM (GB) for the selected GPU(s). The measurement itself lives in konfai-apps
@@ -169,51 +169,89 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         default_batch = self._batch_override or plan_batch or 1
         dialog = qt.QDialog(self.ui.advancedButton)
         dialog.setWindowTitle("Advanced inference settings")
-        # Roomy + scrollable: the model-parameter matrix can be tall, so wrap the form in a scroll area
-        # and pin the OK/Cancel box below it. A generous minimum size opens the dialog wide enough to read
-        # the full title and the matrix grid without hand-resizing.
-        dialog.setMinimumSize(600, 520)
-        dialog.setStyleSheet(_ADVANCED_QSS)
+        # Both dimensions are fitted to the content once built (see the resize below); the scroll
+        # area takes over past the height cap.
+        dialog.setMinimumWidth(520)
+        dialog.setSizeGripEnabled(True)
+        dialog.setStyleSheet(helpers.themed_dialog_qss())
         outer = qt.QVBoxLayout(dialog)
         scroll = qt.QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(qt.QFrame.NoFrame)
         content = qt.QWidget()
-        form = qt.QFormLayout(content)
+        body = qt.QVBoxLayout(content)
+        body.setContentsMargins(4, 4, 4, 4)
+        body.setSpacing(10)
         scroll.setWidget(content)
         outer.addWidget(scroll)
 
+        def add_section(title: str) -> None:
+            label = qt.QLabel(title.upper())
+            label.setObjectName("dialogSection")
+            body.addWidget(label)
+
+        def add_card():
+            frame = qt.QFrame()
+            frame.setObjectName("card")
+            card_form = qt.QFormLayout(frame)
+            card_form.setContentsMargins(14, 12, 14, 12)
+            body.addWidget(frame)
+            return card_form
+
+        add_section("Performance")
+        perf = add_card()
         auto_check = qt.QCheckBox("Follow the app's VRAM plan (auto)")
         auto_check.setChecked(self._patch_override is None and self._batch_override is None)
-        form.addRow(auto_check)
+        perf.addRow(auto_check)
+        if plan_patch and plan_batch:
+            # Make 'auto' concrete: show the plan the run would follow right now on this machine.
+            hint = qt.QLabel(f"Auto plan on this machine: patch {'×'.join(str(v) for v in plan_patch)}, batch {plan_batch}")
+            hint.setObjectName("planHint")
+            perf.addRow(hint)
 
         spins = []
         if patch:
             labels = ["Z", "Y", "X"] if len(patch) == 3 else [f"dim {i}" for i in range(len(patch))]
-            for i, (label, value) in enumerate(zip(labels, patch, strict=False)):
+            patch_row = qt.QWidget()
+            patch_layout = qt.QHBoxLayout(patch_row)
+            patch_layout.setContentsMargins(0, 0, 0, 0)
+            for label, value in zip(labels, patch, strict=False):
                 spin = qt.QSpinBox()
+                spins.append(spin)
                 if int(value) == 1:
                     # A patch dimension of 1 is fixed (slice-wise on that axis) — don't offer it. Keep a
                     # hidden value holder (never shown) so the override still carries the full patch.
                     spin.setRange(1, 1)
                     spin.setValue(1)
-                    spins.append(spin)
                     continue
                 spin.setRange(1, 4096)
                 spin.setValue(int(value))
-                form.addRow(f"Patch {label}:", spin)
-                spins.append(spin)
+                spin.setButtonSymbols(qt.QAbstractSpinBox.NoButtons)  # type the value — arrows look cramped
+                spin.setFixedWidth(72)
+                if patch_layout.count():
+                    times = qt.QLabel("×")
+                    times.setObjectName("dim")
+                    patch_layout.addWidget(times)
+                # The axis letter sits OUTSIDE the field: inside (as a prefix) it reads as editable text.
+                axis = qt.QLabel(label)
+                axis.setObjectName("dim")
+                patch_layout.addWidget(axis)
+                patch_layout.addWidget(spin)
+            patch_layout.addStretch(1)
+            perf.addRow("Patch size:", patch_row)
         else:
             # No declared patch geometry: overriding a patch we don't know would clash with the app's
             # extend_slice; only expose the batch override here.
             note = qt.QLabel("This app does not declare a patch size, so only the batch size can be overridden.")
             note.setWordWrap(True)
-            form.addRow(note)
+            perf.addRow(note)
 
         batch_spin = qt.QSpinBox()
         batch_spin.setRange(1, 4096)
         batch_spin.setValue(default_batch)
-        form.addRow("Batch size:", batch_spin)
+        batch_spin.setButtonSymbols(qt.QAbstractSpinBox.NoButtons)
+        batch_spin.setFixedWidth(90)
+        perf.addRow("Batch size:", batch_spin)
 
         def _toggle(checked):
             for spin in spins:
@@ -237,20 +275,34 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         constraints = params.get("constraints") or {}
         param_widgets: list[tuple[str, object, object]] = []
         if values:
-            form.addRow(qt.QLabel("<b>Model parameters</b>"))
+            add_section("Model parameters")
+            scalars = None  # scalar rows share one card; a nested block in between starts a fresh one
             for name, default in values.items():
                 current = self._param_override.get(name, default)
                 widget, reader = self._build_value_editor(current, constraints.get(name), name)
                 param_widgets.append((name, default, reader))
                 if isinstance(default, (dict, list)):
-                    # A nested / repeatable value (e.g. the resolutions matrix) takes the full width, its name
-                    # a section header above — no wasted label column next to a big editor.
+                    # A nested / repeatable value (e.g. the resolutions matrix) takes the full width on the
+                    # gray canvas, its name a header above — its own inner cards carry the hierarchy.
                     header = qt.QLabel(name)
                     header.setObjectName("sectionHeader")
-                    form.addRow(header)
-                    form.addRow(widget)
+                    body.addWidget(header)
+                    body.addWidget(widget)
+                    scalars = None
                 else:
-                    form.addRow(f"{name}:", widget)
+                    if scalars is None:
+                        scalars = add_card()
+                    scalars.addRow(f"{name}:", widget)
+        body.addStretch(1)
+
+        # Hand-built footer, pinned below the scroll area: the utility actions sit on the left, OK/Cancel
+        # on the right. QDialogButtonBox roles are not used for the utility buttons because their placement
+        # is style-dependent (Fusion inserts ActionRole between OK and Cancel).
+        footer = qt.QHBoxLayout()
+        reset_button = qt.QPushButton("Restore defaults")
+        reset_button.setToolTip("Drop every override (patch, batch and model parameters) and reopen on the app's defaults.")
+        footer.addWidget(reset_button)
+        if values:
 
             def _on_save():
                 self._save_as_local_app(app, param_widgets, dialog)
@@ -258,8 +310,8 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             save_button = qt.QPushButton("Save as local app…")
             save_button.setToolTip("Copy this app into a local folder with the current parameters as its defaults.")
             save_button.clicked.connect(_on_save)
-            form.addRow(save_button)
-
+            footer.addWidget(save_button)
+        footer.addStretch(1)
         # Add the buttons explicitly: in PythonQt, QDialogButtonBox(Ok | Cancel) can mis-resolve the
         # OR'ed int to the (orientation) constructor overload and render a box with NO buttons.
         buttons = qt.QDialogButtonBox()
@@ -267,7 +319,25 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         buttons.addButton(qt.QDialogButtonBox.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
-        outer.addWidget(buttons)  # pinned below the scroll area, always visible even with a tall matrix
+        footer.addWidget(buttons)
+
+        def _restore_defaults():
+            self._patch_override = None
+            self._batch_override = None
+            self._param_override = {}
+            self._refresh_advanced_button()
+            dialog.reject()  # discard the current edits...
+            self.on_advanced_clicked()  # ...and reopen seeded from the app's own defaults
+
+        reset_button.clicked.connect(_restore_defaults)
+        outer.addLayout(footer)
+
+        # Open fitted to the content in BOTH dimensions (the scroll area's sizeHint ignores its
+        # widget): a parameter-less app gets a small box, a tall matrix caps at 720 and scrolls.
+        dialog.resize(
+            min(max(content.sizeHint.width() + 40, 520), 760),
+            min(content.sizeHint.height() + 70, 720),
+        )
 
         if not dialog.exec_():
             return
@@ -281,17 +351,35 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         self._param_override = self._collect_param_overrides(param_widgets)
         self._refresh_advanced_button()
 
+    def _advanced_gear_icon(self, modified: bool):
+        """The shared gear icon; with an orange corner dot when an override is active."""
+        import qt
+
+        pixmap = qt.QPixmap(helpers.resource_path("Icons/gear.png"))
+        if modified:
+            painter = qt.QPainter(pixmap)
+            painter.setRenderHint(qt.QPainter.Antialiasing)
+            painter.setPen(qt.Qt.NoPen)
+            painter.setBrush(qt.QColor("#f59e0b"))
+            radius = pixmap.width() * 0.34
+            painter.drawEllipse(qt.QRectF(pixmap.width() - radius, 0, radius, radius))
+            painter.end()
+        return qt.QIcon(pixmap)
+
     def _refresh_advanced_button(self):
         """Mark the gear when an override is active, so the user sees it is no longer on 'auto'."""
+        import qt
+
+        self.ui.advancedButton.setIconSize(qt.QSize(20, 20))
         if self._patch_override or self._batch_override or self._param_override:
             patch = "x".join(str(v) for v in self._patch_override) if self._patch_override else "auto"
             tip = f"Override active — patch {patch}, batch {self._batch_override or 'auto'}"
             if self._param_override:
                 tip += f", {len(self._param_override)} parameter(s)"
-            self.ui.advancedButton.setText("⚙*")
+            self.ui.advancedButton.setIcon(self._advanced_gear_icon(True))
             self.ui.advancedButton.setToolTip(tip + ".")
         else:
-            self.ui.advancedButton.setText("⚙")
+            self.ui.advancedButton.setIcon(self._advanced_gear_icon(False))
             self.ui.advancedButton.setToolTip("Advanced: override patch size, batch size, and model parameters.")
 
     @staticmethod
@@ -585,7 +673,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             return
 
         new_app = LocalAppRepositoryFromDirectory(Path(parent_dir), safe)
-        selection.ui.appComboBox.addItem(new_app.get_display_name(), new_app)
+        selection.ui.appComboBox.addItem(helpers.app_task_icon(new_app), new_app.get_display_name(), new_app)
         selection.ui.appComboBox.setCurrentIndex(selection.ui.appComboBox.findData(new_app))
         selection.app_local_repositoy.append(new_app.get_name())
         self._update_logs(f"[KonfAI] Saved local app '{display_name.strip()}' at {Path(parent_dir) / safe}.")
@@ -612,11 +700,30 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         ):
             self.set_parameter("number_of_mc_dropout", str(app.get_mc_dropout()))
 
-        self.ui.ttaSpinBox.setEnabled(app.get_maximum_tta() > 0)
+        # Sampling controls only appear when the app can actually use them: several checkpoints to
+        # ensemble, TTA passes declared, MC-dropout passes declared. A single-model app shows none.
+        multi_checkpoints = len(app.get_checkpoints_name()) > 1
+        for widget in (
+            self.ui.label_ensemble,
+            self.ui.checkpointsComboBox,
+            self.ui.ensembleSpinBox,
+            self.ui.label_selected_checkpoints,
+            self.ui.selectedCheckpointsWidget,
+        ):
+            widget.setVisible(multi_checkpoints)
+
+        has_tta = app.get_maximum_tta() > 0
+        self.ui.label_tta.setVisible(has_tta)
+        self.ui.ttaSpinBox.setVisible(has_tta)
         self.ui.ttaSpinBox.setMaximum(app.get_maximum_tta())
 
-        self.ui.mcDropoutSpinBox.setEnabled(app._mc_dropout > 0)
-        self.ui.mcDropoutSpinBox.setMaximum(app._mc_dropout)
+        has_mc_dropout = app.get_mc_dropout() > 0
+        self.ui.label_mcdo.setVisible(has_mc_dropout)
+        self.ui.mcDropoutSpinBox.setVisible(has_mc_dropout)
+        self.ui.mcDropoutSpinBox.setMaximum(app.get_mc_dropout())
+
+        # The gear sits next to Run, so an app with no sampling control loses the whole Sampling row.
+        self.ui.label_stochastic.setVisible(multi_checkpoints or has_tta or has_mc_dropout)
 
         # Reset any override when the app changes: a patch/batch chosen for one model must not carry over
         # to another (different geometry / VRAM plan). The new app starts fresh from its own plan.
@@ -626,9 +733,11 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         self._param_override = {}
         self._refresh_advanced_button()
 
-        # Uncertainty estimation availability depends on app capabilities
+        # Uncertainty estimation availability depends on app capabilities and on the run being sampled
+        # several times (ensemble / TTA / MC-dropout)
         has_inference, has_evaluation, has_uncertainty = app.has_capabilities()
-        self.ui.uncertaintyCheckBox.setEnabled(has_uncertainty)
+        self._has_uncertainty = has_uncertainty
+        self._update_uncertainty_visibility()
 
         self._rebuild_io_selectors(app)
 

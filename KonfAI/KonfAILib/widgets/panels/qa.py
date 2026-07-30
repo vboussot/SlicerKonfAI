@@ -54,9 +54,25 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
         self.uncertainty_panel = KonfAIMetricsPanel()
         self.ui.noRefMetricsPlaceholder.layout().addWidget(self.uncertainty_panel)
 
+        # Document-mode tabs: flat tab bars without the heavy frame around the page, so the two
+        # nested tab levels stop reading as boxes-in-boxes.
+        self.ui.qaTabWidget.setDocumentMode(True)
+
+        # The run-context summary (App / Ensemble / TTA / MC) reads as subtle pills, not raised boxes.
+        for frame in (
+            self.ui.appSummaryFrame,
+            self.ui.ensembleSummaryFrame,
+            self.ui.ttaSummaryFrame,
+            self.ui.mcSummaryFrame,
+        ):
+            frame.setStyleSheet(
+                "QFrame { background: rgba(128,128,128,0.12); border: none; border-radius: 10px; }"
+            )
+
         # Internal tabs: one per EvaluationKey declared by the app manifest;
         # hidden in static (single evaluation) mode.
         self._evaluation_tabs = QTabWidget()
+        self._evaluation_tabs.setDocumentMode(True)
         self._evaluation_tabs.setVisible(False)
         self.ui.evaluationTabsPlaceholder.layout().addWidget(self._evaluation_tabs)
         self._evaluation_tabs.currentChanged.connect(self.on_tab_changed)

@@ -3,6 +3,18 @@
    <class>KonfAIAppTemplateWidget</class>
    <widget class="qMRMLWidget" name="KonfAIAppTemplateWidget">
       <layout class="QVBoxLayout" name="verticalLayout_inferenceTab">
+         <property name="leftMargin">
+            <number>0</number>
+         </property>
+         <property name="topMargin">
+            <number>0</number>
+         </property>
+         <property name="rightMargin">
+            <number>0</number>
+         </property>
+         <property name="bottomMargin">
+            <number>0</number>
+         </property>
          <!-- App selection panel -->
          <item>
             <widget class="QWidget" name="appSelectionPlaceholder">

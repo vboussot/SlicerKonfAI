@@ -92,12 +92,12 @@ class ChipSelector:
             self._add(all_items[0])
 
     def selected(self) -> list[str]:
-        """Return currently selected chip texts (in layout order)."""
+        """Return currently selected chip names (in layout order)."""
         out: list[str] = []
         for i in range(self._layout.count()):
             w = self._layout.itemAt(i).widget()
             if isinstance(w, QPushButton):
-                out.append(w.text)
+                out.append(w.property("chipName"))
         return out
 
     def _add(self, text: str) -> None:
@@ -105,7 +105,9 @@ class ChipSelector:
         if not text or text in self.selected():
             return
 
-        btn = QPushButton(text)
+        # The visible label carries a ✕ affordance; the identity stays in the 'chipName' property.
+        btn = QPushButton(f"{text}  ✕")
+        btn.setProperty("chipName", text)
         btn.flat = True
         btn.toolTip = f"Click to remove {text}"
         btn.minimumHeight = 20
@@ -158,7 +160,7 @@ class ChipSelector:
         # remove chip widget
         for i in range(self._layout.count()):
             w = self._layout.itemAt(i).widget()
-            if isinstance(w, QPushButton) and w.text == text:
+            if isinstance(w, QPushButton) and w.property("chipName") == text:
                 self._layout.removeWidget(w)
                 w.deleteLater()
                 break
