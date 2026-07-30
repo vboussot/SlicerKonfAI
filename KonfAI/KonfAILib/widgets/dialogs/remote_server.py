@@ -29,6 +29,7 @@ from qt import (
 )
 
 from KonfAILib.logic.servers import SERVICE, RemoteServer
+from KonfAILib.widgets.helpers import style_run_button, themed_dialog_qss
 
 
 class RemoteServerConfigDialog(QDialog):
@@ -38,11 +39,14 @@ class RemoteServerConfigDialog(QDialog):
         self.remote_server = remote_server
         self.setWindowTitle(f"Configure server: {remote_server.name}")
         self.setModal(True)
+        self.setStyleSheet(themed_dialog_qss())
+        self.setMinimumWidth(420)
 
         self._remove = False  # <-- flag
 
         self.hostEdit = QLineEdit(remote_server.host)
         self.portSpin = QSpinBox()
+        self.portSpin.setButtonSymbols(QSpinBox.NoButtons)
         self.portSpin.setRange(1, 65535)
         self.portSpin.setValue(int(remote_server.port))
         self.tokenEdit = QLineEdit(remote_server.token)
@@ -51,10 +55,13 @@ class RemoteServerConfigDialog(QDialog):
 
         self.statusLabel = QLabel("")
         self.statusLabel.setWordWrap(True)
+        self.statusLabel.setObjectName("planHint")
 
         self.checkButton = QPushButton("Check")
         self.saveButton = QPushButton("Save")
+        style_run_button(self.saveButton)
         self.removeButton = QPushButton("Remove")
+        self.removeButton.setObjectName("remove")
         self.cancelButton = QPushButton("Cancel")
 
         form = QFormLayout()
@@ -70,6 +77,8 @@ class RemoteServerConfigDialog(QDialog):
         btns.addWidget(self.cancelButton)
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 12)
+        root.setSpacing(10)
         root.addLayout(form)
         root.addWidget(self.statusLabel)
         root.addLayout(btns)
@@ -120,10 +129,13 @@ class RemoteServerAddDialog(QDialog):
         self.remote_servers_name = remote_servers_name
         self.setWindowTitle("Add remote server")
         self.setModal(True)
+        self.setStyleSheet(themed_dialog_qss())
+        self.setMinimumWidth(420)
 
         self.nameEdit = QLineEdit("")
         self.hostEdit = QLineEdit("127.0.0.1")
         self.portSpin = QSpinBox()
+        self.portSpin.setButtonSymbols(QSpinBox.NoButtons)
         self.portSpin.setRange(1, 65535)
         self.portSpin.setValue(8000)
         self.tokenEdit = QLineEdit("")
@@ -132,9 +144,11 @@ class RemoteServerAddDialog(QDialog):
 
         self.statusLabel = QLabel("")
         self.statusLabel.setWordWrap(True)
+        self.statusLabel.setObjectName("planHint")
 
         self.checkButton = QPushButton("Check")
         self.addButton = QPushButton("Add")
+        style_run_button(self.addButton)
         self.cancelButton = QPushButton("Cancel")
 
         form = QFormLayout()
@@ -150,6 +164,8 @@ class RemoteServerAddDialog(QDialog):
         btns.addWidget(self.cancelButton)
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 12)
+        root.setSpacing(10)
         root.addLayout(form)
         root.addWidget(self.statusLabel)
         root.addLayout(btns)

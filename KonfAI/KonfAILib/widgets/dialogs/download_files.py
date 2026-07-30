@@ -33,7 +33,7 @@ from qt import (
     QVBoxLayout,
 )
 
-from KonfAILib.widgets.helpers import resource_path
+from KonfAILib.widgets.helpers import resource_path, style_run_button, themed_dialog_qss
 
 
 class DownloadFilesDialog(QDialog):
@@ -46,9 +46,10 @@ class DownloadFilesDialog(QDialog):
         super().__init__()
         self.setWindowTitle("Download from Hugging Face")
         self.setModal(True)
-        self.resize(600, 450)
+        self.setStyleSheet(themed_dialog_qss())
 
         self.label = QLabel("Select files to refresh:")
+        self.label.setObjectName("sectionHeader")
         self.listw = QListWidget()
         self.listw.setSelectionMode(QListWidget.MultiSelection)
 
@@ -71,6 +72,7 @@ class DownloadFilesDialog(QDialog):
         self.openFolderButton.setToolTip("Open local app folder")
         self.openFolderButton.setEnabled(on_open_folder is not None)
         self.downloadButton = QPushButton("Download")
+        style_run_button(self.downloadButton)
         self.cancelButton = QPushButton("Cancel")
 
         btns = QHBoxLayout()
@@ -80,9 +82,14 @@ class DownloadFilesDialog(QDialog):
         btns.addWidget(self.cancelButton)
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 12)
+        root.setSpacing(8)
         root.addWidget(self.label)
         root.addWidget(self.listw)
         root.addLayout(btns)
+
+        # Open fitted to the list: a handful of files gets a compact dialog, long lists cap and scroll.
+        self.resize(520, min(140 + len(files) * 28, 560))
 
         if on_open_folder is not None:
             self.openFolderButton.clicked.connect(on_open_folder)
