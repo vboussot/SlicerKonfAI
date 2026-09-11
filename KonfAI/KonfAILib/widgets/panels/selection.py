@@ -142,8 +142,8 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
 
     def populate_apps(self, force_update: bool = False) -> None:
         remote_server, ok = self.get_remote_server()
-        from konfai.utils.errors import AppRepositoryError
         from konfai_apps.app_repository import (
+            AppRepositoryError,
             get_app_repository_info,
             get_available_apps_on_hf_repo,
             get_available_apps_on_remote_server,
