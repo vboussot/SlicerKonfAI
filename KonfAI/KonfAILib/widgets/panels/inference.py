@@ -71,7 +71,8 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
 
         self.ui.ttaSpinBox.valueChanged.connect(self.on_tta_changed)
         self.ui.mcDropoutSpinBox.valueChanged.connect(self.on_mc_dropout_changed)
-        # Advanced overrides (patch size per dim + batch size); None = auto (follow the app's VRAM plan).
+        # Advanced overrides (patch size per dim + batch size); None = auto (the app's own patch and batch:
+        # its config decides, `batch_size: 0` there has the run measure the batch on the device).
         self._patch_default: list[int] | None = None
         self._patch_override: list[int] | None = None
         self._batch_override: int | None = None
@@ -124,24 +125,6 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         self.set_parameter("number_of_mc_dropout", str(self.ui.mcDropoutSpinBox.value))
         self._update_uncertainty_visibility()
 
-    def _current_free_vram(self) -> float | None:
-        """Free VRAM (GB) for the selected GPU(s). The measurement itself lives in konfai-apps
-        (``current_free_vram`` — the same logic inference uses to pick its VRAM plan); this method only
-        gathers the UI state (selected devices, remote server) and delegates."""
-        try:
-            devices = self.template.get_device()
-        except Exception:
-            return None
-        if not devices:
-            return None
-        try:
-            remote_server, _ = self.get_remote_server()
-        except Exception:
-            remote_server = None
-        from konfai_apps.app_repository import current_free_vram
-
-        return current_free_vram([int(d) for d in devices], remote_server)
-
     def _sync_segmentation_show3d(self, node) -> None:
         """Forward only segmentation nodes to the Show-3D button; a scalar-volume output would otherwise
         raise 'method requires a vtkMRMLSegmentationNode, a vtkMRMLScalarVolumeNode was provided'."""
@@ -151,22 +134,16 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
     def on_advanced_clicked(self):
         """Open the advanced dialog: override the patch size (one spinbox per dimension) and batch size.
 
-        The spinboxes are seeded with the plan konfai-apps would actually run on this machine now: the
-        app's VRAM plan resolved for the selected device's free VRAM (which carries a patch geometry even
-        when the app declares no static ``patch_size``). A 2.5D app shows ``[1, Y, X]`` (first axis locked
-        to 1); leaving 'auto' checked follows the plan without an override.
+        The patch spinboxes are seeded with the app's own patch. The batch is the app's config's: the
+        shipped apps say ``batch_size: 0`` and the run measures it on the device (a forward of one patch,
+        then of two), so its box starts at 1 and only an explicit value overrides the config. A 2.5D app
+        shows ``[1, Y, X]`` (first axis locked to 1); leaving 'auto' checked keeps both.
         """
         import qt
 
         app = self.template.ui.appComboBox.currentData
-        plan_patch, plan_batch = None, None
-        if app is not None and hasattr(app, "resolve_vram_plan"):
-            resolved = app.resolve_vram_plan(self._current_free_vram())
-            if resolved:
-                plan_patch, plan_batch = resolved
-
-        patch = self._patch_override or plan_patch or self._patch_default
-        default_batch = self._batch_override or plan_batch or 1
+        patch = self._patch_override or self._patch_default
+        default_batch = self._batch_override or 1
         dialog = qt.QDialog(self.ui.advancedButton)
         dialog.setWindowTitle("Advanced inference settings")
         # Both dimensions are fitted to the content once built (see the resize below); the scroll
@@ -200,14 +177,9 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
 
         add_section("Performance")
         perf = add_card()
-        auto_check = qt.QCheckBox("Follow the app's VRAM plan (auto)")
+        auto_check = qt.QCheckBox("Auto (the app's own patch and batch)")
         auto_check.setChecked(self._patch_override is None and self._batch_override is None)
         perf.addRow(auto_check)
-        if plan_patch and plan_batch:
-            # Make 'auto' concrete: show the plan the run would follow right now on this machine.
-            hint = qt.QLabel(f"Auto plan on this machine: patch {'×'.join(str(v) for v in plan_patch)}, batch {plan_batch}")
-            hint.setObjectName("planHint")
-            perf.addRow(hint)
 
         spins = []
         if patch:
@@ -726,7 +698,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         self.ui.label_stochastic.setVisible(multi_checkpoints or has_tta or has_mc_dropout)
 
         # Reset any override when the app changes: a patch/batch chosen for one model must not carry over
-        # to another (different geometry / VRAM plan). The new app starts fresh from its own plan.
+        # to another (different geometry). The new app starts fresh from its own patch.
         self._patch_default = app.get_patch_size() if hasattr(app, "get_patch_size") else None
         self._patch_override = None
         self._batch_override = None
@@ -910,7 +882,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             "--mc",
             str(self.ui.mcDropoutSpinBox.value),
         ]
-        # Advanced overrides: patch size (per dimension) + batch size. Unset = auto (follow the VRAM plan).
+        # Advanced overrides: patch size (per dimension) + batch size. Unset = auto (the app's config decides).
         if self._patch_override:
             args += ["--patch-size", *[str(v) for v in self._patch_override]]
         if self._batch_override:

@@ -368,7 +368,7 @@
                <item>
                   <widget class="QToolButton" name="advancedButton">
                      <property name="toolTip">
-                        <string>Advanced: override the patch size (per dimension) and batch size. Default: follow the app's VRAM plan.</string>
+                        <string>Advanced: override the patch size (per dimension) and batch size. Default: the app's own patch and batch.</string>
                      </property>
                      <property name="text">
                         <string />
