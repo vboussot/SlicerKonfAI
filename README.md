@@ -1,128 +1,103 @@
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/vboussot/KonfAI/blob/main/LICENSE)
-[![CI](https://github.com/vboussot/KonfAI/actions/workflows/KonfAI_ci.yml/badge.svg)](https://github.com/vboussot/KonfAI/actions/workflows/KonfAI_ci.yml)
-[![Paper](https://img.shields.io/badge/📌%20Paper-KonfAI-blue)](https://www.arxiv.org/abs/2508.09823)
+# 🧩 SlicerKonfAI: KonfAI Apps in 3D Slicer
 
-# SlicerKonfAI
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/vboussot/SlicerKonfAI/blob/main/LICENSE)
+[![Models](https://img.shields.io/badge/apps-huggingface-orange)](https://huggingface.co/VBoussot)
+[![PyPI](https://img.shields.io/pypi/v/konfai-apps?label=konfai--apps)](https://pypi.org/project/konfai-apps/)
+[![Paper](https://img.shields.io/badge/📌%20Paper-KonfAI-blue)](https://arxiv.org/abs/2508.09823)
 
-<img src="KonfAI.png" alt="Slicer KonfAI Logo" width="300" align="right">
+<img src="KonfAI.png" alt="KonfAI logo" width="250" align="right">
 
-SlicerKonfAI is a **3D Slicer extension** that provides a graphical user interface (GUI) to run **AI workflows for medical imaging** directly inside Slicer, such as **multi-organ segmentation** and **synthetic CT (sCT) generation**.
+**SlicerKonfAI** runs **KonfAI Apps** inside 3D Slicer: published deep learning workflows for **segmentation**, **synthetic CT** and **registration**, packaged with their weights and their inference, evaluation and uncertainty configurations. Load a volume, pick an app from Hugging Face or from a folder, click Run, and get volumes and segmentations back in the scene. The same panel evaluates a result against a reference, estimates its uncertainty without any reference, and runs on the local GPU or on a remote server.
 
-With SlicerKonfAI, **you can** load patient images, select an AI App, run inference, and immediately visualize results as Slicer volumes or segmentations.  
-It also includes built-in **Quality Assurance (QA)** tools:
-- **Reference-based evaluation** (when ground truth is available)
-- **Reference-free uncertainty estimation** (when no ground truth is available)
+<br>
 
-> If you are a developer who wants to create or package new Apps, see the **Developer** section below.
+📚 Reference
 
----
-
-## 🖼️ Interface Overview
-
-| Inference interface | Uncertainty interface |
-|-------------------------|------------------------|
-| <img src="docs/Inference.png" alt="Synthesis interface" width="100%"> | <img src="docs/Uncertainty.png" alt="Segmentation QA interface" width="100%"> |
-| *Figure 1 – Inference.* | *Figure 2 – Uncertainty estimation.* |
-
-<p align="center">
-  <img src="docs/Evaluation.png" alt="Evaluation interface" width="45%"><br>
-  <em>Figure 3 – Evaluation with reference.</em>
-</p>
+> 🔗 KonfAI: A Modular and Fully Configurable Framework for Deep Learning in Medical Imaging
+> Valentin Boussot, Jean-Louis Dillenseger
+> [arXiv:2508.09823](https://arxiv.org/abs/2508.09823)
 
 ---
 
-## ✅ What you can do in 3 minutes (step-by-step tutorial)
+## 🌐 The KonfAI ecosystem
 
-This quick tutorial demonstrates the typical clinical workflow: **load → run inference → review results → assess reliability**.
-
-### 1) Install and open the module
-1. Install **3D Slicer ≥ 5.10**
-2. Open **3D Slicer** and go to **Extension Manager**
-3. Search for **KonfAI**
-4. Click **Install**
-5. Restart Slicer and open the **KonfAI** module from the **Pipelines** category
-
-### 2) Load a case
-1. In Slicer, click **DICOM** (or drag-and-drop a NIfTI / NRRD / MHA file)
-2. Load a volume (e.g., `volume.nii.gz`)
-3. Confirm the volume appears in the **Data** module and is visible in the slice views
-
-### 3) Run inference
-1. On KonfAI module go to the **Inference** tab
-2. Select:
-   - **Input volume**: `volume`
-   - **KonfAI App**: choose an app (e.g., *TotalSegmentator* or *MRSegmentator*)
-3. Click **Run**
-4. Wait for completion: outputs are automatically loaded back into Slicer as:
-   - **Segmentation nodes** (organs, anatomical structures, tumors)
-   - **Volume nodes** (probability maps, heatmaps, synthetic CT, etc., depending on the app)
-
-✅ You can now inspect the results in 2D and 3D and adjust visualization (opacity, label colors, 3D rendering).
-
-### 4) QA without reference (uncertainty estimation)
-When no ground truth annotation is available, you can still assess prediction reliability.
-
-1. Go to the **Evaluation** tab and select **No reference (Uncertainty)**
-2. Select the **inference stack volume** generated during prediction
-3. Click **Run**
-4. Review the generated uncertainty outputs (depending on the app), typically:
-   - uncertainty maps / heatmaps
-   - voxel-wise confidence measures
-   - summary metrics
-
-Uncertainty can be computed using:
-- test-time augmentation (TTA)
-- stochastic dropout
-- multi-model ensembling
-
-### 5) QA with reference (optional)
-If a reference annotation (ground truth) is available:
-
-1. Load the reference segmentation or volume
-2. Go to the **Evaluation** tab
-3. Select:
-   - **Output volume**
-   - **Reference volume**
-   - Optional **ROI mask**
-4. Click **Run**
-5. Review quantitative metrics and qualitative overlays inside Slicer
+- **[KonfAI](https://github.com/fideus-labs/KonfAI)**: the engine. Declarative YAML workflows for training, patch-based inference, TTA, ensembles, evaluation; the `konfai-apps` package and CLI; the HTTP server; the MCP server and **KonfAI Studio**.
+- **[SlicerKonfAI](https://github.com/vboussot/SlicerKonfAI)** (this repo): the generic Slicer interface and the `KonfAI` library the sister extensions build on.
+- **[SlicerImpactSynth](https://github.com/vboussot/SlicerImpactSynth)**: synthetic CT from MRI and CBCT with the [TotalSynth](https://arxiv.org/abs/2609.13838) models.
+- **[SlicerImpactReg](https://github.com/vboussot/SlicerImpactReg)**: multimodal registration with the IMPACT metric (elastix, ConvexAdam, FireANTs presets).
+- **Apps on Hugging Face**: [TotalSegmentator-KonfAI](https://huggingface.co/VBoussot/TotalSegmentator-KonfAI), [MRSegmentator-KonfAI](https://huggingface.co/VBoussot/MRSegmentator-KonfAI), [ImpactSeg](https://huggingface.co/VBoussot/ImpactSeg), [ImpactSynth](https://huggingface.co/VBoussot/ImpactSynth), [ImpactReg](https://huggingface.co/VBoussot/ImpactReg).
 
 ---
 
-## ✨ Features
+## 🎥 Videos
 
-### **• Hugging Face–Hosted Apps**
-SlicerKonfAI automatically discovers and downloads *KonfAI Apps* hosted on Hugging Face. No manual installation is required: select an App from the list and it becomes instantly available. You can also add your own Apps to the workspace.
+Three walkthroughs of about a minute each, with captions, recorded on a pelvic CT of the public SynthRAD2023 dataset.
+👉 Every step with a screenshot: [`TUTORIAL.md`](TUTORIAL.md)
 
-### **• Fast Inference via KonfAI Apps**
-SlicerKonfAI runs KonfAI Apps directly inside Slicer, following the exact inference workflow defined in each App. This includes image preprocessing, model execution, and output reconstruction. The system supports GPU acceleration and optimized runtime performance to deliver fast, clinically usable inference.
+| Run a published app | Quality assurance | Apps, settings and servers |
+|---------------------|-------------------|----------------------------|
+| [<img src="Screenshots/tutorial/03-result.jpg" alt="TotalSegmentator in Slicer" width="100%">](Screenshots/SlicerKonfAI-inference.mp4) | [<img src="Screenshots/tutorial/04-evaluation.jpg" alt="Dice against a reference" width="100%">](Screenshots/SlicerKonfAI-qa.mp4) | [<img src="Screenshots/tutorial/09-remote.jpg" alt="Remote server" width="100%">](Screenshots/SlicerKonfAI-apps.mp4) |
+| [`SlicerKonfAI-inference.mp4`](Screenshots/SlicerKonfAI-inference.mp4) | [`SlicerKonfAI-qa.mp4`](Screenshots/SlicerKonfAI-qa.mp4) | [`SlicerKonfAI-apps.mp4`](Screenshots/SlicerKonfAI-apps.mp4) |
 
-### **• Quality Assurance (QA)**
-SlicerKonfAI provides two complementary QA modules that assess prediction reliability by executing the App’s evaluation or uncertainty workflow, which can produce both quantitative metrics and qualitative output images:
-
-- **Reference-based QA** : automatic comparison between predictions and available ground-truth annotations.
-- **Reference-free QA**: uncertainty estimation when no reference is available, using:
-  - TTA  
-  - Stochastic dropout  
-  - Multi-model ensembling
-
-### **• Tight integration with Slicer**
-  Use volumes already loaded in Slicer (DICOM, NRRD, NIfTI, etc.) as inputs and write results back as:
-
-  * Volume nodes (e.g. synthetic CT, logits, heatmaps)
-  * Label maps / segmentation nodes (e.g. organ masks, tumor masks)
-
-### **• Configurable Apps root**  
-  The workflows inside each App can be modified or extended (e.g., adding new evaluation metrics or custom processing steps), and SlicerKonfAI will automatically use the updated configuration.
-
-### **• Built-in State-of-the-Art Apps**
-  By default, SlicerKonfAI includes several state-of-the-art KonfAI Apps for tasks such as anatomical segmentation and synthetic CT generation, providing ready-to-use baselines for experimentation and clinical evaluation.
+<!-- Drop Screenshots/SlicerKonfAI-inference.mp4 into the README editor on GitHub and paste the user-attachments URL it gives here: GitHub then embeds a player. -->
 
 ---
 
-SlicerKonfAI is built on top of the **KonfAI** , a fully configurable and modular deep learning framework that defines complete training, inference, and evaluation workflows through YAML files, enabling reproducible, transparent, and advanced medical imaging pipelines.
+## ✨ Key Features
 
-For more information about KonfAI, visit the project repository: https://github.com/vboussot/KonfAI
+- **Apps from Hugging Face, offline first**
+  The app list is built from the local Hugging Face cache and refreshed on demand. Add an app from any repository or from a local folder, download only the checkpoints you need, remove what you do not use. Each app shows an icon, a short description and a full description card with the training data and how to cite.
+
+- **Inference on the volumes of the scene**
+  Inputs are Slicer nodes (DICOM, NIfTI, NRRD, MHA, several inputs when the app declares them). Outputs come back as volumes, label maps or Segmentation nodes with the names and colours of the app, and a Show 3D button.
+
+- **Sampling controls that follow the app**
+  Checkpoint chips for the ensemble, test-time augmentation and MC dropout appear only when the app supports them. The *Uncertainty* checkbox keeps every sampled prediction as an inference stack for the QA tab.
+
+- **Quality assurance, with or without a reference**
+  *With reference*: the app's evaluation workflow (Dice, MAE, PSNR, SSIM and the maps it defines), with an optional mask and a transform to align the output. *No reference*: the app's uncertainty workflow on the inference stack (variance maps, segmentation disagreement).
+
+- **Advanced settings and local apps**
+  Override the patch size and the batch size, edit the parameters the app exposes, restore the defaults, or save the current settings as a new local app. Scaffold a fine-tuning app from any app that ships its training configuration.
+
+- **Local GPU, CPU or remote server**
+  The device row lists the CPU and every GPU combination. A `konfai-apps-server` on another machine runs the same apps: add it with its host, port and token (kept in the OS keyring), pick one of its GPUs, and the RAM and VRAM gauges show its memory.
+
+- **Live feedback**
+  Progress and speed of the running process, RAM and VRAM gauges, the log of the process, a button to open the temporary folder of the run, Stop at any time.
+
+- **A library for sister extensions**
+  ImpactSynth, ImpactReg and ImpactSeg are a few lines each: they register app templates on the `KonfAI` facade and inherit every feature above.
+
+- **KonfAI Studio**
+  One button starts the local KonfAI Studio web app, a chat interface over the KonfAI MCP server, and opens it in the browser.
+
+---
+
+## 📦 Built-in Apps
+
+| App | Task | Models | Notes |
+|-----|------|--------|-------|
+| **TotalSegmentator** (KonfAI port) | CT segmentation, 117 structures | `total` (5 models), `total-3mm` (1 model) | 1.8 to 3.9× faster and 2.7 to 4.8× less host RAM than the original tool on the same GPU |
+| **TotalSegmentator MRI** (KonfAI port) | MRI segmentation, 50 structures | `total_mr` (2 models), `total_mr-3mm` (1 model) | |
+| **MRSegmentator** (KonfAI port) | MRI and CT segmentation, 40 structures | 5 folds | 1.2 to 1.7× faster, 1.4 to 5.4× less host RAM |
+| **IMPACT-Seg** | Body mask on CT, MRI and CBCT | `body` | Used by the synthesis apps for their body mask |
+| **TotalSynth** ([ImpactSynth](https://huggingface.co/VBoussot/ImpactSynth)) | Synthetic CT from MRI or CBCT | `MR`, `CBCT`, `MR_CBCT`, `Finetune` (5 folds each) | Evaluation against a CT, uncertainty and conformity maps |
+
+The ports reuse the original weights; the speed comes from KonfAI's patch-native inference (GPU accumulation, streamed reads and writes, measured batch size). Details and benchmarks on the Hugging Face cards.
+
+---
+
+## 🚀 Quick Start
+
+1. Install **3D Slicer ≥ 5.10**, then from the **Extensions Manager** the **PyTorch** extension (SlicerPyTorch) and **KonfAI**.
+2. Restart Slicer and open **KonfAI** (category **Pipelines**). On the first opening, `konfai-apps` is installed into Slicer's Python.
+3. Load a volume (**DICOM** module, or drag and drop a NIfTI / NRRD / MHA file).
+4. Choose an app in the list, for example *Segmentation: Total Segmentator*. Select the **input volume**, click **Run**. The segmentation is loaded as a Segmentation node; click **Show 3D**.
+5. **QA with a reference**: open **Evaluation**, tab *With reference*, pick the output (a label map for a segmentation, the volume for a synthesis) and the reference, click **Run**. Metrics appear in a list and the result images load with a click.
+6. **QA without reference**: at inference, select several checkpoints and tick **Uncertainty**; then tab *No reference (Uncertainty)*, **Run**.
+
+👉 Every step with a screenshot, plus the download dialog, the Advanced dialog, fine-tuning setup, remote servers and Studio: [`TUTORIAL.md`](TUTORIAL.md)
 
 ---
 
@@ -130,79 +105,101 @@ For more information about KonfAI, visit the project repository: https://github.
 
 ### 🧩 What is a KonfAI App?
 
-A **KonfAI App** is a self-contained workflow package built with KonfAI.  
-It defines how a model is executed, how its outputs are generated, and how optional evaluation or uncertainty workflows are performed.  
-Apps are portable, versioned, and can be executed identically from Python, the command line, or SlicerKonfAI.
-
-A typical KonfAI App contains:
-
-- **A trained model** (single checkpoint or ensemble)
-- **Workflow configuration files** (`Prediction.yml`, `Evaluation.yml`, `Uncertainty.yml`) defining inference, evaluation, and uncertainty pipelines
-- **A metadata file** (`app.json`) describing the App for SlicerKonfAI
-
-A minimal App directory may look like:
+A **KonfAI App** is a self-contained workflow package: a trained model (one checkpoint or an ensemble), the YAML workflows KonfAI executes, and an `app.json` that describes the app to the interfaces. Apps are portable and versioned; they run identically from Python, from the CLI and from Slicer.
 
 ```text
 my_konfai_app/
-├── app.json                # Metadata for SlicerKonfAI
-├── Prediction.yml         # Inference config used by SlicerKonfAI
-├── Evaluation.yml         # (Optional) evaluation workflow
-├── Uncertainty.yml        # (Optional) uncertainty workflow
-└── checkpoint.pt          # Checkpoint used by Prediction.yml
+├── app.json           # metadata for the interfaces
+├── Prediction.yml     # inference workflow
+├── Evaluation.yml     # (optional) evaluation against a reference
+├── Uncertainty.yml    # (optional) uncertainty from an inference stack
+├── Config.yml         # (optional) training workflow, enables fine-tuning
+├── Model.py, *.yml    # model definition
+├── icon.png           # (optional)
+└── CV_0.pt, CV_1.pt   # checkpoints
 ```
-
-An example `app.json` could be:
 
 ```json
 {
-    "display_name": "Lung Lobe Segmentation",
-    "short_description": "Deep learning model for segmenting lung lobes on CBCT scans.",
-    "description": "This App performs domain adaptation by first synthesizing a CT-like volume from the input CBCT, followed by lung lobe segmentation using a 3D UNet-based model.",
+    "display_name": "Segmentation: Lung lobes",
+    "short_description": "Lung lobe segmentation on CBCT.<br><b>How to cite:</b> ...",
+    "description": "Full description shown when the card is expanded (HTML).",
+    "task": "segmentation",
+    "models": ["CV_0.pt", "CV_1.pt"],
     "tta": 4,
-    "mc_dropout": 0
+    "mc_dropout": 0,
+    "patch_size": [96, 128, 160],
+    "inputs": {"CBCT": {"display_name": "CBCT", "volume_type": "VOLUME", "required": true}},
+    "outputs": {"Lobes": {"display_name": "Lung lobes", "volume_type": "SEGMENTATION", "required": true}},
+    "inputs_evaluations": {"Image": {"Evaluation.yml": {"Seg": {"display_name": "Segmentation", "volume_type": "SEGMENTATION", "required": true},
+                                                        "Ref": {"display_name": "Reference", "volume_type": "SEGMENTATION", "required": true}}}},
+    "terminology": {"1": {"name": "left_upper_lobe", "color": "#3b82f6"}}
 }
 ```
 
-SlicerKonfAI uses this metadata to:
+SlicerKonfAI uses it to name and describe the app (`display_name`, `short_description`, `description`, `icon`, `task` for the default icon), to show the sampling controls (`models`, `tta`, `mc_dropout`), to build the input and output selectors (`inputs`, `outputs`, with `VOLUME`, `SEGMENTATION`, `FIDUCIALS` and `TRANSFORM` types), to build the evaluation tabs (`inputs_evaluations`), to seed the Advanced dialog (`patch_size`) and to name and colour the segments (`terminology`).
+👉 Packaging, local and remote apps: [KonfAI documentation, Apps](https://konfai.readthedocs.io/en/latest/usage/apps.html)
 
-- Display the App name and description
-- Enable App-specific options such as TTA or dropout
+### ⚙️ How SlicerKonfAI runs an App
 
----
-
-### ⚙️ How SlicerKonfAI runs an App (conceptual)
-
-Internally, SlicerKonfAI typically:
-
-1. Prepares a temporary working directory for the current case.
-2. Exports the selected Slicer nodes to disk in MHA format, as expected by the App.
-3. Executes the App by calling the KonfAI Apps CLI. For example, an inference call may look like:
+1. A temporary working directory is created for the run.
+2. The selected nodes are written to it: volumes as `.mha`, transforms as `.h5`, markups as `.fcsv`.
+3. The `konfai-apps` CLI is launched in a separate process:
 
    ```bash
-   konfai-apps infer <app_name> \
-       -i Volume.mha \
-       -o Output \
-       --ensemble_models <checkpoint_name> \
-       --tta 2 \
-       --mc 0 \
-       --gpu 0
+   konfai-apps infer <app> -i Volume.mha -o Output --ensemble_models CV_0.pt CV_1.pt --tta 2 --mc 0 --gpu 0 \
+       [--patch-size 1 512 512] [--batch-size 16] [--set key=value] [-uncertainty] [--host H --port P --token T]
+   konfai-apps eval <app> -i Volume.mha --gt Reference.mha [--mask Mask.mha] -o Evaluation --gpu 0
+   konfai-apps uncertainty <app> -i InferenceStack.mha -o Uncertainty --gpu 0
    ```
-4. Monitors the running process (stdout/stderr) and streams logs to the Slicer interface.
-5. Imports the generated outputs back into Slicer (volumes, segmentations, uncertainty maps, metrics).
+
+   With a remote server selected, the same CLI posts the job to the server and streams its logs.
+4. stdout and stderr are streamed to the log; tqdm output drives the progress bar and the speed label.
+5. The outputs are loaded back: `uint8` volumes as Segmentation nodes, other volumes as scalar volumes shown over the input, the inference stack as a Sequence, metrics and result images in the Evaluation panel.
+
+### 🔌 Building a sister extension
+
+The KonfAI extension exposes a stable facade (`from KonfAI import ...`, API version 2). An extension with its own set of apps is a module that registers app templates:
+
+```python
+from KonfAI import KONFAI_SLICER_API_VERSION, KonfAIAppTemplateWidget, KonfAICoreWidget, _is_reload_setup
+
+class MyExtensionWidget(ScriptedLoadableModuleWidget):
+    def setup(self):
+        super().setup()
+        self.konfai_core = KonfAICoreWidget("My Extension")
+        self.konfai_core.register_apps([
+            KonfAIAppTemplateWidget("Segmentation", ["MyOrg/MySegmentationApps"]),
+            KonfAIAppTemplateWidget("Synthesis", ["MyOrg/MySynthesisApps"]),
+        ])
+        self.layout.addWidget(self.konfai_core)
+        if _is_reload_setup("SlicerMyExtension"):
+            self.konfai_core.enter()
+
+    def enter(self): self.konfai_core.enter()
+    def exit(self): self.konfai_core.exit()
+    def cleanup(self): self.konfai_core.cleanup()
+```
+
+Each template becomes a tab with the app list of its repositories, the inference panel and the evaluation panel. `INFERENCE_PANEL_CLASS` and `QA_PANEL_CLASS` can be overridden for task-specific panels (SlicerImpactReg does this for registration). Set `EXTENSION_DEPENDS "KonfAI"` in `CMakeLists.txt`. The contract test `KonfAI/Testing/Python/KonfAIApiContractTest.py` freezes the facade.
+
+### 🛠️ Run from source
+
+```bash
+Slicer --additional-module-paths /path/to/SlicerKonfAI/KonfAI
+```
+
+Settings are kept under `KonfAI-Settings` (app lists per template, remote servers, Studio executable) and shared with the sister extensions.
+
+---
 
 ## 📚 References
 
-Boussot, V. & Dillenseger, J.-L., **KonfAI: A Modular and Fully Configurable Framework for Deep Learning in Medical Imaging.** *arXiv:2508.09823*, 2025.  
+Boussot, V. & Dillenseger, J.-L., **KonfAI: A Modular and Fully Configurable Framework for Deep Learning in Medical Imaging.** *arXiv:2508.09823*, 2025.
 
---- 
-
-> SlicerKonfAI = GUI + data exchange + process manager
-
-> KonfAI = the engine that does all computations.
+Boussot, V., Hémon, C., Barateau, A., Lafond, C., Nunes, J.-C., Dillenseger, J.-L., **TotalSynth: Robust Whole-Body Synthetic CT from MRI and CBCT.** *arXiv:2609.13838*, 2026.
 
 ---
 
-
-
-
-
+> SlicerKonfAI = GUI + data exchange + process manager
+> KonfAI = the engine that does all computations
