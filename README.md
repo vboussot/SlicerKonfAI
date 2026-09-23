@@ -41,6 +41,13 @@ Three walkthroughs of about a minute each, with captions, recorded on a pelvic C
 
 <!-- Drop Screenshots/SlicerKonfAI-inference.mp4 into the README editor on GitHub and paste the user-attachments URL it gives here: GitHub then embeds a player. -->
 
+https://github.com/user-attachments/assets/f7b8994e-021e-4635-8547-e550e0ce4037
+
+https://github.com/user-attachments/assets/4768e3e0-323a-4283-bb7b-939aac541a8d
+
+https://github.com/user-attachments/assets/d3728d16-1004-4100-9e8a-f31b8e72ed75
+
+
 ---
 
 ## ✨ Key Features
