@@ -96,7 +96,7 @@ def _make_row(layout: QFormLayout, entry, node_types: list[str]):
     selector.nodeTypes = node_types
     selector.addEnabled = False
     selector.removeEnabled = False
-    selector.showChildNodeTypes = False
+    selector.showChildNodeTypes = True  # a label map is a volume too: segmentation outputs and references must be selectable
     selector.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
     selector.setFixedHeight(26)
     return label, selector

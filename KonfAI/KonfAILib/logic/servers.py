@@ -46,3 +46,16 @@ class RemoteServer:
 
     def get_url(self) -> str:
         return f"http://{self.host}:{self.port}"
+
+    def get_json(self, path: str, timeout_s: float, params: list[tuple[str, int]] | None = None) -> dict:
+        """The JSON body of ``GET <base url>/<path>``, as konfai's own RemoteServer provides it
+        (konfai.get_ram, get_vram and get_available_devices call this on the server object)."""
+        import json
+        from urllib.parse import urlencode
+        from urllib.request import Request, urlopen
+
+        url = f"{self.get_url()}/{path}"
+        if params:
+            url += "?" + urlencode(params)
+        with urlopen(Request(url, headers=self.get_headers()), timeout=timeout_s) as response:  # nosec B310
+            return json.loads(response.read().decode("utf-8"))
