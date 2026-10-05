@@ -25,7 +25,7 @@
 - **[SlicerKonfAI](https://github.com/vboussot/SlicerKonfAI)** (this repo): the generic Slicer interface and the `KonfAI` library the sister extensions build on.
 - **[SlicerImpactSynth](https://github.com/vboussot/SlicerImpactSynth)**: synthetic CT from MRI and CBCT with the [TotalSynth](https://arxiv.org/abs/2609.13838) models.
 - **[SlicerImpactReg](https://github.com/vboussot/SlicerImpactReg)**: multimodal registration with the IMPACT metric (elastix, ConvexAdam, FireANTs presets).
-- **Apps on Hugging Face**: [TotalSegmentator-KonfAI](https://huggingface.co/VBoussot/TotalSegmentator-KonfAI), [MRSegmentator-KonfAI](https://huggingface.co/VBoussot/MRSegmentator-KonfAI), [ImpactSeg](https://huggingface.co/VBoussot/ImpactSeg), [ImpactSynth](https://huggingface.co/VBoussot/ImpactSynth), [ImpactReg](https://huggingface.co/VBoussot/ImpactReg).
+- **Apps on Hugging Face**: [TotalSegmentator-KonfAI](https://huggingface.co/VBoussot/TotalSegmentator-KonfAI), [MRSegmentator-KonfAI](https://huggingface.co/VBoussot/MRSegmentator-KonfAI), [ImpactSeg](https://huggingface.co/VBoussot/ImpactSeg), [DentalSegmentator-KonfAI](https://huggingface.co/VBoussot/DentalSegmentator-KonfAI), [ImpactSynth](https://huggingface.co/VBoussot/ImpactSynth), [ImpactReg](https://huggingface.co/VBoussot/ImpactReg).
 
 ---
 

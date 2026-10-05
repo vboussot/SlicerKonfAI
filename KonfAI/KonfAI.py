@@ -151,7 +151,13 @@ class KonfAIWidget(ScriptedLoadableModuleWidget):
         # Create and register one KonfAI app specialized for inference
         prediction_widget = KonfAIAppTemplateWidget(
             "Inference",
-            ["VBoussot/ImpactSynth", "VBoussot/MRSegmentator-KonfAI", "VBoussot/TotalSegmentator-KonfAI", "VBoussot/ImpactSeg"],
+            [
+                "VBoussot/ImpactSynth",
+                "VBoussot/MRSegmentator-KonfAI",
+                "VBoussot/TotalSegmentator-KonfAI",
+                "VBoussot/ImpactSeg",
+                "VBoussot/DentalSegmentator-KonfAI",
+            ],
         )
         self.konfai_core.register_apps([prediction_widget])
 
