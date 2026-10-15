@@ -420,7 +420,7 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
             args += ["--cpu", "1"]
 
         if remote_server is not None:
-            args += ["--host", remote_server.host, "--port", remote_server.port, "--token", remote_server.token]
+            args += remote_server.cli_args()
 
         def on_end_function() -> None:
             """
@@ -480,7 +480,7 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
             args += ["--cpu", "1"]
 
         if remote_server is not None:
-            args += ["--host", remote_server.host, "--port", remote_server.port, "--token", remote_server.token]
+            args += remote_server.cli_args()
 
         n = self.ui.inputVolumeSequenceSelector.currentNode().GetNumberOfDataNodes()
         images = [

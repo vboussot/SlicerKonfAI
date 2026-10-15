@@ -16,17 +16,45 @@
 
 """Remote computation servers: value object and keyring-backed token access."""
 
+import json
+import ssl
+
 import slicer
+from qt import QSettings
 
 SERVICE = "KonfAI"
+#: Where each server's host, port and transport are kept between sessions; its token is in the keyring.
+SETTINGS_KEY = "KonfAI-Settings/RemoteServers"
+
+
+def stored_servers() -> dict[str, dict]:
+    """The servers kept in the settings, by name."""
+    raw = QSettings().value(SETTINGS_KEY)
+    return json.loads(raw) if raw else {}
+
+
+def store_server(remote_server: "RemoteServer") -> None:
+    """Keep ``remote_server``'s host, port and transport in the settings, under its name."""
+    servers = stored_servers()
+    servers[remote_server.name] = {
+        "host": remote_server.host,
+        "port": remote_server.port,
+        "https": remote_server.https,
+        "ca_cert": remote_server.ca_cert,
+    }
+    QSettings().setValue(SETTINGS_KEY, json.dumps(servers))
 
 
 class RemoteServer:
 
-    def __init__(self, name: str, host: str, port: int) -> None:
+    def __init__(self, name: str, host: str, port: int, https: bool | None = None, ca_cert: str | None = None) -> None:
         self.name = name
         self.host = host
         self.port = port
+        # Rebuilt from name, host and port alone, a server takes its transport from the settings.
+        stored = stored_servers().get(name, {}) if https is None else {}
+        self.https = bool(stored.get("https", False)) if https is None else https
+        self.ca_cert = (stored.get("ca_cert") or None) if https is None else (ca_cert or None)
         try:
             import keyring
         except ImportError:
@@ -45,7 +73,22 @@ class RemoteServer:
         return {}
 
     def get_url(self) -> str:
-        return f"http://{self.host}:{self.port}"
+        return f"{'https' if self.https else 'http'}://{self.host}:{self.port}"
+
+    def ssl_context(self) -> ssl.SSLContext | None:
+        """The context an HTTPS server's certificate is checked in: ``ca_cert``, else the system's authorities."""
+        return ssl.create_default_context(cafile=self.ca_cert) if self.https else None
+
+    def cli_args(self) -> list[str]:
+        """The options that send a konfai-apps command to this server."""
+        args = ["--host", self.host, "--port", str(self.port)]
+        if self.token:
+            args += ["--token", self.token]
+        if self.ca_cert:
+            args += ["--ca-cert", self.ca_cert]
+        elif self.https:
+            args.append("--https")
+        return args
 
     def get_json(self, path: str, timeout_s: float, params: list[tuple[str, int]] | None = None) -> dict:
         """The JSON body of ``GET <base url>/<path>``, as konfai's own RemoteServer provides it
@@ -57,5 +100,7 @@ class RemoteServer:
         url = f"{self.get_url()}/{path}"
         if params:
             url += "?" + urlencode(params)
-        with urlopen(Request(url, headers=self.get_headers()), timeout=timeout_s) as response:  # nosec B310
+        with urlopen(  # nosec B310
+            Request(url, headers=self.get_headers()), timeout=timeout_s, context=self.ssl_context()
+        ) as response:
             return json.loads(response.read().decode("utf-8"))

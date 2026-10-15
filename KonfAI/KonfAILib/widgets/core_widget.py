@@ -682,6 +682,8 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
                 data[rs.name] = {
                     "host": rs.host,
                     "port": rs.port,
+                    "https": rs.https,
+                    "ca_cert": rs.ca_cert,
                 }
 
         settings.setValue(
@@ -711,6 +713,8 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
                         name=name,
                         host=d["host"],
                         port=int(d["port"]),
+                        https=bool(d.get("https", False)),
+                        ca_cert=d.get("ca_cert"),
                     )
                     self.ui.remoteServerComboBox.addItem(name, remote_server)
             self.ui.remoteServerComboBox.blockSignals(was_blocked)

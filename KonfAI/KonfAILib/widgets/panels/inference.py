@@ -910,7 +910,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             args += ["--cpu", "1"]
 
         if remote_server is not None:
-            args += ["--host", remote_server.host, "--port", remote_server.port, "--token", remote_server.token]
+            args += remote_server.cli_args()
 
         input_node = self.ui.inputVolumeSelector.currentNode()
 
