@@ -18,7 +18,9 @@
 
 import slicer
 from qt import (
+    QCheckBox,
     QDialog,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -28,8 +30,38 @@ from qt import (
     QVBoxLayout,
 )
 
-from KonfAILib.logic.servers import SERVICE, RemoteServer
+from KonfAILib.logic.servers import SERVICE, RemoteServer, store_server
 from KonfAILib.widgets.helpers import style_run_button, themed_dialog_qss
+
+
+class _TransportFields:
+    """The HTTPS check box and the certificate it is checked against, as both dialogs show them."""
+
+    def __init__(self, https: bool, ca_cert: str | None) -> None:
+        self.httpsCheck = QCheckBox("HTTPS")
+        self.httpsCheck.setChecked(https)
+        self.caCertEdit = QLineEdit(ca_cert or "")
+        self.caCertEdit.setPlaceholderText("Optional: the server's certificate, if self-signed (PEM)")
+        browse = QPushButton("…")
+        browse.clicked.connect(lambda _=False: self._browse())
+        self.caCertRow = QHBoxLayout()
+        self.caCertRow.addWidget(self.caCertEdit)
+        self.caCertRow.addWidget(browse)
+
+    def _browse(self) -> None:
+        path = QFileDialog.getOpenFileName(None, "Server certificate", "", "Certificates (*.pem *.crt);;All files (*)")
+        if path:
+            self.caCertEdit.setText(path)
+            self.httpsCheck.setChecked(True)
+
+    def add_rows(self, form: QFormLayout) -> None:
+        form.addRow("Transport", self.httpsCheck)
+        form.addRow("CA certificate", self.caCertRow)
+
+    def apply(self, remote_server: RemoteServer) -> None:
+        remote_server.ca_cert = self.caCertEdit.text.strip() or None
+        # A certificate to check against is only ever an HTTPS server's.
+        remote_server.https = bool(self.httpsCheck.checked) or remote_server.ca_cert is not None
 
 
 class RemoteServerConfigDialog(QDialog):
@@ -52,6 +84,7 @@ class RemoteServerConfigDialog(QDialog):
         self.tokenEdit = QLineEdit(remote_server.token)
         self.tokenEdit.setPlaceholderText("Optional (Bearer token)")
         self.tokenEdit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.transport = _TransportFields(remote_server.https, remote_server.ca_cert)
 
         self.statusLabel = QLabel("")
         self.statusLabel.setWordWrap(True)
@@ -68,6 +101,7 @@ class RemoteServerConfigDialog(QDialog):
         form.addRow("Host", self.hostEdit)
         form.addRow("Port", self.portSpin)
         form.addRow("Token", self.tokenEdit)
+        self.transport.add_rows(form)
 
         btns = QHBoxLayout()
         btns.addWidget(self.checkButton)
@@ -92,6 +126,7 @@ class RemoteServerConfigDialog(QDialog):
         self.remote_server.host = self.hostEdit.text.strip()
         self.remote_server.port = int(self.portSpin.value)
         self.remote_server.token = self.tokenEdit.text.strip()
+        self.transport.apply(self.remote_server)
         from konfai import check_server
 
         ok, msg = check_server(self.remote_server)
@@ -110,6 +145,8 @@ class RemoteServerConfigDialog(QDialog):
         self.remote_server.host = self.hostEdit.text.strip()
         self.remote_server.port = int(self.portSpin.value)
         self.remote_server.token = self.tokenEdit.text.strip()
+        self.transport.apply(self.remote_server)
+        store_server(self.remote_server)
         try:
             import keyring
         except ImportError:
@@ -141,6 +178,7 @@ class RemoteServerAddDialog(QDialog):
         self.tokenEdit = QLineEdit("")
         self.tokenEdit.setPlaceholderText("Optional (Bearer token)")
         self.tokenEdit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.transport = _TransportFields(False, None)
 
         self.statusLabel = QLabel("")
         self.statusLabel.setWordWrap(True)
@@ -156,6 +194,7 @@ class RemoteServerAddDialog(QDialog):
         form.addRow("Host", self.hostEdit)
         form.addRow("Port", self.portSpin)
         form.addRow("Token", self.tokenEdit)
+        self.transport.add_rows(form)
 
         btns = QHBoxLayout()
         btns.addWidget(self.checkButton)
@@ -191,6 +230,7 @@ class RemoteServerAddDialog(QDialog):
             self.statusLabel.setText("❌ This server name already exists.")
             return
         if self.on_check():
+            store_server(self.get())
             self.accept()
 
     def get(self) -> RemoteServer:
@@ -214,4 +254,6 @@ class RemoteServerAddDialog(QDialog):
             except keyring.errors.PasswordDeleteError:
                 pass
 
-        return RemoteServer(name, host, port)
+        remote_server = RemoteServer(name, host, port, https=False)
+        self.transport.apply(remote_server)
+        return remote_server
