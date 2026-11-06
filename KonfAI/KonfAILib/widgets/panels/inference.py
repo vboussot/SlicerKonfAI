@@ -18,7 +18,6 @@
 TTA/MC-dropout sampling options and the inference run itself."""
 
 import random
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -64,9 +63,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         # setSegmentationNode() rejects non-segmentation nodes; the output selector also holds scalar
         # volumes (registration / synthesis outputs), so route through a type guard instead of connecting
         # setSegmentationNode directly (which would raise TypeError on a scalar-volume output).
-        self.ui.outputVolumeSelector.connect(
-            "currentNodeChanged(vtkMRMLNode*)", self._sync_segmentation_show3d
-        )
+        self.ui.outputVolumeSelector.connect("currentNodeChanged(vtkMRMLNode*)", self._sync_segmentation_show3d)
         self.ui.segmentationShow3DButton.setVisible(False)
 
         self.ui.ttaSpinBox.valueChanged.connect(self.on_tta_changed)
@@ -79,6 +76,8 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         # Tuned model parameters {config key: value}; empty = the app's own config defaults. A nested value
         # (e.g. the whole `resolutions` matrix) is just one entry here — it gets no special-casing.
         self._param_override: dict[str, object] = {}
+        # The app's preset the run uses (APP#PRESET), None for its base config.
+        self._preset: str | None = None
         self.ui.advancedButton.clicked.connect(self.on_advanced_clicked)
 
         # Run button for inference
@@ -101,9 +100,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         """Show the Uncertainty checkbox only when there is a spread to measure: several
         checkpoints/presets selected, or TTA / MC-dropout passes, on an app that supports it."""
         multi_sample = (
-            len(self.chip_selector.selected()) > 1
-            or self.ui.ttaSpinBox.value > 0
-            or self.ui.mcDropoutSpinBox.value > 0
+            len(self.chip_selector.selected()) > 1 or self.ui.ttaSpinBox.value > 0 or self.ui.mcDropoutSpinBox.value > 0
         )
         visible = multi_sample and self._has_uncertainty
         self.ui.uncertaintyCheckBox.setVisible(visible)
@@ -238,8 +235,30 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         # sparse tree from the model TYPES>}. Each value is rendered purely by STRUCTURE, overlaid with its
         # constraint (choices -> dropdown, {min,max} -> spin bounds). A nested value such as the per-resolution
         # `resolutions` matrix is just one entry, edited by the same recursive editor — no special case. No
-        # app.json declaration is needed; "Save as local app" bakes the current values into a local copy.
+        # app.json declaration is needed; "Save as preset" keeps the current values as a preset of the app.
+        presets = app.get_presets() if (app is not None and hasattr(app, "get_presets")) else {}
+        if presets:
+            # A preset is a named list of --set: the parameters below start from it, and an edit is a --set after it.
+            add_section("Preset")
+            preset_combo = qt.QComboBox()
+            preset_combo.addItem("Base config", None)
+            for preset_name, preset in presets.items():
+                preset_combo.addItem(preset_name, preset_name)
+                preset_combo.setItemData(preset_combo.count - 1, preset.description, qt.Qt.ToolTipRole)
+            preset_combo.setCurrentIndex(max(preset_combo.findData(self._preset), 0))
+
+            def _on_preset_changed(index):
+                self._preset = preset_combo.itemData(index)
+                self._param_override = {}  # edits were relative to the preset they were made on
+                self._refresh_advanced_button()
+                dialog.reject()
+                self.on_advanced_clicked()  # reopen on the new preset's values
+
+            preset_combo.currentIndexChanged.connect(_on_preset_changed)
+            add_card().addRow("Preset:", preset_combo)
         try:
+            if hasattr(app, "use_preset"):
+                app.use_preset(self._preset if self._preset in presets else None)
             params = app.get_parameters() if (app is not None and hasattr(app, "get_parameters")) else {}
         except Exception:  # noqa: BLE001 - a config/type read failure must not break the dialog
             params = {}
@@ -272,15 +291,17 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         # is style-dependent (Fusion inserts ActionRole between OK and Cancel).
         footer = qt.QHBoxLayout()
         reset_button = qt.QPushButton("Restore defaults")
-        reset_button.setToolTip("Drop every override (patch, batch and model parameters) and reopen on the app's defaults.")
+        reset_button.setToolTip(
+            "Drop every override (patch, batch and model parameters) and reopen on the app's defaults."
+        )
         footer.addWidget(reset_button)
-        if values:
+        if values and hasattr(app, "save_preset"):
 
             def _on_save():
-                self._save_as_local_app(app, param_widgets, dialog)
+                self._save_as_preset(app, param_widgets, dialog)
 
-            save_button = qt.QPushButton("Save as local app…")
-            save_button.setToolTip("Copy this app into a local folder with the current parameters as its defaults.")
+            save_button = qt.QPushButton("Save as preset…")
+            save_button.setToolTip("Keep the current parameters as a preset of this app: a name for their --set.")
             save_button.clicked.connect(_on_save)
             footer.addWidget(save_button)
         footer.addStretch(1)
@@ -343,9 +364,11 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         import qt
 
         self.ui.advancedButton.setIconSize(qt.QSize(20, 20))
-        if self._patch_override or self._batch_override or self._param_override:
+        if self._patch_override or self._batch_override or self._param_override or self._preset:
             patch = "x".join(str(v) for v in self._patch_override) if self._patch_override else "auto"
             tip = f"Override active — patch {patch}, batch {self._batch_override or 'auto'}"
+            if self._preset:
+                tip += f", preset {self._preset}"
             if self._param_override:
                 tip += f", {len(self._param_override)} parameter(s)"
             self.ui.advancedButton.setIcon(self._advanced_gear_icon(True))
@@ -608,47 +631,32 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             args += ["--set", f"{name}={self._format_config_value(value)}"]
         return args
 
-    def _save_as_local_app(self, app, param_widgets, dialog) -> None:
-        """Export the app into a local folder with the current parameters baked in as defaults (à la fine-tune)."""
-        import re
+    def _save_as_preset(self, app, param_widgets, dialog) -> None:
+        """Keep the current parameters as a preset of the app: the chosen preset's --set, then the edits.
 
+        konfai-apps writes it where the user may: their presets file for an app of the Hugging Face cache, the app's
+        own app.json for a local app folder. A preset is flat, so one saved from another carries its --set.
+        """
         import qt
-        from konfai_apps.app_repository import LocalAppRepositoryFromDirectory
 
-        overrides = self._collect_param_overrides(param_widgets)
-        set_args = [f"{name}={self._format_config_value(value)}" for name, value in overrides.items()]
-
-        parent_dir = qt.QFileDialog.getExistingDirectory(None, "Choose parent directory for the new local app")
-        if not parent_dir:
-            return
-        name = qt.QInputDialog.getText(None, "Save as local app", "New app name (folder will be created):")
+        name = qt.QInputDialog.getText(None, "Save as preset", "Preset name (letters, digits, '_' and '-'):")
         if not name or not name.strip():
             return
-        display_name = qt.QInputDialog.getText(None, "Save as local app", "New display name:")
-        if not display_name or not display_name.strip():
-            return
-        safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", name.strip())
-        if not safe:
-            qt.QMessageBox.warning(None, "Invalid name", "Please enter a valid name.")
-            return
-
-        selection = self.template.selection_panel
-        listed = [selection.ui.appComboBox.itemText(i) for i in range(selection.ui.appComboBox.count)]
-        if display_name.strip() in listed:
-            qt.QMessageBox.critical(None, "App already listed", f'The app "{display_name.strip()}" is already listed.')
-            return
-
+        description = qt.QInputDialog.getText(None, "Save as preset", "What it is for:") or ""
+        chosen = app.get_presets().get(self._preset) if self._preset else None
+        edits = self._collect_param_overrides(param_widgets)
+        overrides = [
+            *(chosen.overrides if chosen else ()),
+            *(f"{key}={self._format_config_value(value)}" for key, value in edits.items()),
+        ]
         try:
-            app.export_app(Path(parent_dir) / safe, display_name=display_name.strip(), config_overrides=set_args)
-        except Exception as exc:  # noqa: BLE001 - surface any export/copy failure to the user
-            qt.QMessageBox.critical(None, "Save as local app", f"Could not save the app:\n{exc}")
+            written = app.save_preset(name.strip(), description.strip(), overrides)
+        except Exception as exc:  # noqa: BLE001 - surface a refused name or override to the user
+            qt.QMessageBox.critical(None, "Save as preset", f"Could not save the preset:\n{exc}")
             return
-
-        new_app = LocalAppRepositoryFromDirectory(Path(parent_dir), safe)
-        selection.ui.appComboBox.addItem(helpers.app_task_icon(new_app), new_app.get_display_name(), new_app)
-        selection.ui.appComboBox.setCurrentIndex(selection.ui.appComboBox.findData(new_app))
-        selection.app_local_repositoy.append(new_app.get_name())
-        self._update_logs(f"[KonfAI] Saved local app '{display_name.strip()}' at {Path(parent_dir) / safe}.")
+        self._preset, self._param_override = name.strip(), {}
+        self._refresh_advanced_button()
+        self._update_logs(f"[KonfAI] Saved preset '{name.strip()}' of {app.get_name()} in {written}.")
         dialog.accept()
 
     def on_app_changed(self, app) -> None:
@@ -703,6 +711,9 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         self._patch_override = None
         self._batch_override = None
         self._param_override = {}
+        self._preset = None
+        if hasattr(app, "use_preset"):
+            app.use_preset(None)
         self._refresh_advanced_button()
 
         # Uncertainty estimation availability depends on app capabilities and on the run being sampled
@@ -870,7 +881,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         app = self.template.ui.appComboBox.currentData
         args = [
             "infer",
-            app.get_name(),
+            f"{app.get_name()}#{self._preset}" if self._preset else app.get_name(),
             "-i",
             "Volume.mha",
             "-o",
@@ -920,7 +931,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         # Store KonfAI metadata in the MHA header
         sitk_image.SetMetaData(
             "App",
-            app.get_name(),
+            f"{app.get_name()}#{self._preset}" if self._preset else app.get_name(),
         )
         sitk_image.SetMetaData("NumberOfEnsemble", f"{self.ui.ensembleSpinBox.value}")
         sitk_image.SetMetaData("NumberOfTTA", f"{self.ui.ttaSpinBox.value}")
