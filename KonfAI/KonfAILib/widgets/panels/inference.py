@@ -17,10 +17,13 @@
 """Inference panel: input/mask/output selection, checkpoint ensemble,
 TTA/MC-dropout sampling options and the inference run itself."""
 
+import json
 import random
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
+import qt
 import SimpleITK as sitk  # noqa: N813
 import sitkUtils
 import slicer
@@ -33,6 +36,15 @@ from KonfAILib.widgets.panels.base import KonfAIAppPanel
 
 if TYPE_CHECKING:
     from KonfAILib.widgets.app_template import KonfAIAppTemplateWidget
+
+#: konfai's header key for an ensemble stack's member count, and its displacement-field mark.
+MEMBERS_KEY = "konfai_members"
+FIELD_KEY = "konfai_displacement_field"
+
+
+def is_stack(path: Path) -> bool:
+    """Whether ``path`` is an ensemble's stack, ``InferenceStack`` in whatever form."""
+    return path.name.split(".")[0] == "InferenceStack"
 
 
 class KonfAIAppInferencePanel(KonfAIAppPanel):
@@ -96,11 +108,32 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             on_change=self.on_checkpoint_selected_change,
         )
 
+        # The app references the run ensembles (APP#PRESET), one run each: the preset chosen under the app selector
+        # and any other preset of it, or of an app with the same outputs. Every reference, times the checkpoints, TTA
+        # copies and MC-dropout draws above, is a member (konfai-apps infer APP#a APP#b ...).
+        self._references_combo = qt.QComboBox()
+        self._references_combo.toolTip = _("Add a preset to the ensemble: each preset is a run of its own.")
+        self._references_widget = qt.QWidget()
+        references_row = qt.QHBoxLayout(self._references_widget)
+        references_row.setContentsMargins(0, 0, 0, 0)
+        references_row.addWidget(self._references_combo)
+        references_chips = qt.QHBoxLayout()
+        references_row.addLayout(references_chips)
+        references_row.addStretch(1)
+        self._references_label = qt.QLabel(_("Presets"))
+        self.ui.formLayout_inputs.insertRow(4, self._references_label, self._references_widget)  # above Sampling
+        self.reference_selector = ChipSelector(
+            self._references_combo, references_chips, None, 1, on_change=lambda _selected: self._on_references()
+        )
+
     def _update_uncertainty_visibility(self) -> None:
         """Show the Uncertainty checkbox only when there is a spread to measure: several
         checkpoints/presets selected, or TTA / MC-dropout passes, on an app that supports it."""
         multi_sample = (
-            len(self.chip_selector.selected()) > 1 or self.ui.ttaSpinBox.value > 0 or self.ui.mcDropoutSpinBox.value > 0
+            len(self.chip_selector.selected()) > 1
+            or len(self.references()) > 1
+            or self.ui.ttaSpinBox.value > 0
+            or self.ui.mcDropoutSpinBox.value > 0
         )
         visible = multi_sample and self._has_uncertainty
         self.ui.uncertaintyCheckBox.setVisible(visible)
@@ -670,6 +703,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         self._preset, self._param_override = name.strip(), {}
         self._refresh_advanced_button()
         self.template.selection_panel.refresh_presets(app, select=self._preset)
+        self._seed_references(app)
         self._update_logs(f"[KonfAI] Saved preset '{name.strip()}' of {app.get_name()} in {written}.")
         dialog.accept()
 
@@ -681,6 +715,46 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         if app is not None and hasattr(app, "use_preset"):
             app.use_preset(preset)
         self._refresh_advanced_button()
+        if app is not None:
+            self._seed_references(app)
+
+    def _reference(self, app, preset: str | None) -> str:
+        return f"{app.get_name()}#{preset}" if preset else app.get_name()
+
+    def _reference_candidates(self, app) -> list[str]:
+        """The references an ensemble with ``app`` may take: every preset of every listed app whose outputs are
+        ``app``'s (an app with no presets as itself); ``app`` alone when it declares no outputs to match."""
+        outputs = list(dict(getattr(app, "get_outputs", dict)()))
+        combo = self.template.ui.appComboBox
+        candidates = []
+        for index in range(combo.count):
+            other = combo.itemData(index)
+            if other is None or not (
+                other.get_name() == app.get_name()
+                or (outputs and list(dict(getattr(other, "get_outputs", dict)())) == outputs)
+            ):
+                continue
+            presets = list(other.get_presets()) if hasattr(other, "get_presets") else []
+            candidates += [self._reference(other, preset) for preset in presets] or [other.get_name()]
+        return candidates
+
+    def _seed_references(self, app) -> None:
+        """Start the ensemble from the reference chosen under the app selector; the row shows when there is another
+        to add."""
+        chosen = self._reference(app, self._preset)
+        candidates = self._reference_candidates(app)
+        if chosen not in candidates:
+            candidates.insert(0, chosen)
+        self.reference_selector.update(candidates, candidates, [chosen])
+        self._references_label.setVisible(len(candidates) > 1)
+        self._references_widget.setVisible(len(candidates) > 1)
+
+    def references(self) -> list[str]:
+        """The app references the run ensembles, the one chosen under the app selector first."""
+        return self.reference_selector.selected()
+
+    def _on_references(self) -> None:
+        self._update_uncertainty_visibility()
 
     def on_app_changed(self, app) -> None:
         """
@@ -738,6 +812,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         if hasattr(app, "use_preset"):
             app.use_preset(None)
         self._refresh_advanced_button()
+        self._seed_references(app)
 
         # Uncertainty estimation availability depends on app capabilities and on the run being sampled
         # several times (ensemble / TTA / MC-dropout)
@@ -902,15 +977,19 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         self.template.uncertainty_panel.clear_metrics()
 
         app = self.template.ui.appComboBox.currentData
+        references = self.references() or [self._reference(app, self._preset)]
+        # The checkpoints are this app's: references of another app run their own.
+        checkpoints = self.chip_selector.selected()
+        if any(reference.split("#")[0] != app.get_name() for reference in references):
+            checkpoints = []
         args = [
             "infer",
-            f"{app.get_name()}#{self._preset}" if self._preset else app.get_name(),
+            *references,
             "-i",
             "Volume.mha",
             "-o",
             "Output",
-            "--ensemble_models",
-            *self.chip_selector.selected(),
+            *(["--ensemble_models", *checkpoints] if checkpoints else []),
             "--tta",
             str(self.ui.ttaSpinBox.value),
             "--mc",
@@ -930,7 +1009,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         # --download makes konfai-apps fetch the app upfront, with its
         # progress visible in the log panel instead of a silent stall.
         if remote_server is None:
-            missing = set(self.chip_selector.selected()) - set(app.get_checkpoints_name_available())
+            missing = set(checkpoints) - set(app.get_checkpoints_name_available())
             if missing:
                 args += ["--download"]
                 self._update_logs(
@@ -952,10 +1031,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         sitk_image = sitkUtils.PullVolumeFromSlicer(input_node)
 
         # Store KonfAI metadata in the MHA header
-        sitk_image.SetMetaData(
-            "App",
-            f"{app.get_name()}#{self._preset}" if self._preset else app.get_name(),
-        )
+        sitk_image.SetMetaData("App", " ".join(references))
         sitk_image.SetMetaData("NumberOfEnsemble", f"{self.ui.ensembleSpinBox.value}")
         sitk_image.SetMetaData("NumberOfTTA", f"{self.ui.ttaSpinBox.value}")
         sitk_image.SetMetaData("NumberOfMCDropout", f"{self.ui.mcDropoutSpinBox.value}")
@@ -986,7 +1062,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             data = None
             # Find the first non-stack MHA output file
             for file in (self._work_dir / "Output").rglob("*.mha"):
-                if file.name != "InferenceStack.mha":
+                if not is_stack(file):
                     from konfai.utils.dataset import image_to_data
 
                     data, attr = image_to_data(sitk.ReadImage(str(file)))
@@ -999,7 +1075,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             # it (rglob order is not deterministic); the mono-output path above
             # stays untouched.
             if self._extra_output_selectors:
-                files = [f for f in (self._work_dir / "Output").rglob("*.mha") if f.name != "InferenceStack.mha"]
+                files = [f for f in (self._work_dir / "Output").rglob("*.mha") if not is_stack(f)]
 
                 def match_output_file(output_key: str):
                     return next((f for f in files if output_key in f.parts or f.stem == output_key), None)
@@ -1111,31 +1187,53 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
                     foregroundOpacity=0.5,
                 )
 
-            sequence_node = self.template.ui.inputVolumeSequenceSelector.currentNode()
-            if sequence_node is None:
-                sequence_node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSequenceNode", "InputTransformSequence")
-                self.template.ui.inputVolumeSequenceSelector.setCurrentNode(sequence_node)
-            else:
-                sequence_node.RemoveAllDataNodes()
-
-            for file in (self._work_dir / "Output").rglob("*.mha"):
-                if file.name == "InferenceStack.mha":
-                    inference_stack = sitk.ReadImage(str(file))
-                    if inference_stack.GetNumberOfComponentsPerPixel() > 1:
-                        data = sitk.GetArrayFromImage(inference_stack)
-                        for i in range(data.shape[-1]):
-                            img = sitk.GetImageFromArray(data[..., i])
-                            img.CopyInformation(inference_stack)
-                            temp_volume_node = sitkUtils.PushVolumeToSlicer(img, name=f"Output_stack_{i}")
-                            sequence_node.SetDataNodeAtValue(temp_volume_node, str(i))
-                            slicer.mrmlScene.RemoveNode(temp_volume_node)
-
-                    browser_node = slicer.mrmlScene.AddNewNodeByClass(
-                        "vtkMRMLSequenceBrowserNode", "SitkTransformSequenceBrowser"
-                    )
-                    browser_node.SetAndObserveMasterSequenceNodeID(sequence_node.GetID())
-                    for key, value in attr.items():
-                        sequence_node.SetAttribute(key.split("_")[0], str(value))
-                    break
+            stacks = sorted(path for path in (self._work_dir / "Output").rglob("InferenceStack.*") if path.is_file())
+            if stacks:
+                record = self._work_dir / "Output" / "konfai-run.json"
+                names = json.loads(record.read_text()).get("members") if record.is_file() else None
+                sequence_node = self.load_stack(stacks[0], names)
+                for key, value in attr.items() if sequence_node is not None else ():
+                    sequence_node.SetAttribute(key.split("_")[0], str(value))  # App, NumberOf*: the run's summary
 
         self.process.run("konfai-apps", self._work_dir, args, on_end_function)
+
+    def load_stack(self, path: Path, names: list[str] | None = None):
+        """Load an ensemble's stack as the uncertainty panel's sequence, one volume per member.
+
+        The stack holds its members' channels member-major, their count in its header (konfai_members; a stack
+        without it is one member a channel): a member of several channels, a displacement field, is one vector
+        volume. ``names`` (konfai-run.json's members) name them. The sequence keeps the count and the field mark,
+        which the uncertainty panel writes back into the stack it hands konfai-apps."""
+        stack = sitk.ReadImage(str(path))
+        channels = stack.GetNumberOfComponentsPerPixel()
+        members = int(float(stack.GetMetaData(MEMBERS_KEY))) if stack.HasMetaDataKey(MEMBERS_KEY) else channels
+        if members < 2 or channels % members:
+            return None
+        per_member = channels // members
+        data = sitk.GetArrayFromImage(stack)
+        if channels == 1:
+            data = data[..., None]
+        sequence_node = self.template.ui.inputVolumeSequenceSelector.currentNode()
+        if sequence_node is None:
+            sequence_node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSequenceNode", "InferenceStack")
+            self.template.ui.inputVolumeSequenceSelector.setCurrentNode(sequence_node)
+        else:
+            sequence_node.RemoveAllDataNodes()
+        for member in range(members):
+            part = data[..., member * per_member : (member + 1) * per_member]
+            image = sitk.GetImageFromArray(part if per_member > 1 else part[..., 0], isVector=per_member > 1)
+            image.CopyInformation(stack)
+            name = names[member] if names and len(names) == members else f"Member {member + 1}"
+            node = sitkUtils.PushVolumeToSlicer(
+                image,
+                name=name,
+                className="vtkMRMLVectorVolumeNode" if per_member > 1 else "vtkMRMLScalarVolumeNode",
+            )
+            sequence_node.SetDataNodeAtValue(node, str(member))
+            slicer.mrmlScene.RemoveNode(node)
+        sequence_node.SetAttribute("KonfAI.Members", str(members))
+        sequence_node.SetAttribute("KonfAI.DisplacementField", "1" if stack.HasMetaDataKey(FIELD_KEY) else "")
+        browser_node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSequenceBrowserNode", "InferenceStackBrowser")
+        browser_node.SetAndObserveMasterSequenceNodeID(sequence_node.GetID())
+        self.template.update_gui_from_parameter_node()
+        return sequence_node

@@ -22,9 +22,9 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import SimpleITK as sitk  # noqa: N813
-import sitkUtils
 import slicer
-from qt import QFormLayout, QTabWidget, QVBoxLayout, QWidget
+import vtk
+from qt import QFormLayout, QLabel, QTabWidget, QVBoxLayout, QWidget
 
 from KonfAILib.logic.mrml import has_node_content
 from KonfAILib.logic.servers import RemoteServer
@@ -34,6 +34,21 @@ from KonfAILib.widgets.panels.base import KonfAIAppPanel
 
 if TYPE_CHECKING:
     from KonfAILib.widgets.app_template import KonfAIAppTemplateWidget
+
+
+def node_image(node) -> sitk.Image:
+    """``node`` as a SimpleITK image in LPS, a vector volume too: sitkUtils.PullVolumeFromSlicer reads a scalar
+    volume only. The voxel values are the node's own, components included."""
+    array = slicer.util.arrayFromVolume(node)
+    image = sitk.GetImageFromArray(array, isVector=array.ndim == 4)
+    ijk_to_ras = vtk.vtkMatrix4x4()
+    node.GetIJKToRASMatrix(ijk_to_ras)
+    ijk_to_lps = np.diag([-1.0, -1.0, 1.0, 1.0]) @ slicer.util.arrayFromVTKMatrix(ijk_to_ras)
+    spacing = np.array(node.GetSpacing())
+    image.SetSpacing(spacing.tolist())
+    image.SetOrigin(ijk_to_lps[:3, 3].tolist())
+    image.SetDirection((ijk_to_lps[:3, :3] / spacing).ravel().tolist())
+    return image
 
 
 class KonfAIAppQAPanel(KonfAIAppPanel):
@@ -79,6 +94,15 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
         # {EvaluationKey: {key: (required, qMRMLNodeComboBox)}} in manifest order
         self._evaluation_input_selectors: dict = {}
 
+        # The same for the uncertainty configs (inputs_uncertainties): one tab per config, the references it reads
+        # beside the stack.
+        self._uncertainty_tabs = QTabWidget()
+        self._uncertainty_tabs.setDocumentMode(True)
+        self._uncertainty_tabs.setVisible(False)
+        self.ui.formLayout_qa_noref.insertRow(1, self._uncertainty_tabs)
+        self._uncertainty_tabs.currentChanged.connect(self.on_tab_changed)
+        self._uncertainty_input_selectors: dict = {}
+
         # Evaluation / uncertainty input selectors
         self.ui.inputVolumeEvaluationSelector.connect(
             "currentNodeChanged(vtkMRMLNode*)", self.on_input_volume_evaluation_changed
@@ -117,6 +141,41 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
         self.ui.qaTabWidget.setTabEnabled(1, has_uncertainty)
 
         self._rebuild_evaluation_tabs(app)
+        tabs = dict(getattr(app, "get_uncertainties_inputs", dict)())
+        self._uncertainty_input_selectors = self._fill_tabs(self._uncertainty_tabs, tabs, "Unc")
+        self._uncertainty_tabs.setVisible(bool(tabs))
+
+    def _fill_tabs(self, tab_widget, tabs: dict, prefix: str) -> dict:
+        """One tab of ``tab_widget`` per config of ``tabs`` ({EvaluationKey: entries}), a node selector per entry,
+        each selection kept under ``{prefix}/{config file}/{entry}``. Returns {EvaluationKey: {entry: (required,
+        selector)}} in the manifest order."""
+        # QTabWidget.clear() does not destroy the pages: delete them explicitly
+        # so their qMRMLNodeComboBox children stop observing the scene.
+        for i in range(tab_widget.count):
+            tab_widget.widget(i).deleteLater()
+        tab_widget.clear()
+        selectors_by_key = {}
+        for key, entries in tabs.items():
+            tab = QWidget()
+            root = QVBoxLayout(tab)
+            root.setContentsMargins(12, 12, 12, 12)
+            form = QFormLayout()
+            form.setContentsMargins(0, 0, 0, 0)
+            selectors = io_selectors.add_inputs_on_layout(form, entries)
+            if not entries:
+                form.addRow(QLabel("No reference: the run's output alone."))
+            root.addLayout(form)
+            root.addStretch(1)
+            tab_widget.addTab(tab, key.display_name)
+            selectors_by_key[key] = selectors
+            for name, (_required, selector) in selectors.items():
+                param_key = f"{prefix}/{key.evaluation_file}/{name}"
+                selector.connect(
+                    "currentNodeChanged(vtkMRMLNode*)",
+                    lambda node, pk=param_key: self._on_evaluation_selector_changed(pk, node),
+                )
+                selector.setCurrentNode(self.get_parameter_node(param_key))
+        return selectors_by_key
 
     def _rebuild_evaluation_tabs(self, app) -> None:
         """
@@ -127,16 +186,12 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
         """
         evaluations_inputs = dict(getattr(app, "get_evaluations_inputs", dict)())
 
-        # QTabWidget.clear() does not destroy the pages: delete them explicitly
-        # so their qMRMLNodeComboBox children stop observing the scene.
-        for i in range(self._evaluation_tabs.count):
-            self._evaluation_tabs.widget(i).deleteLater()
-        self._evaluation_tabs.clear()
-        self._evaluation_input_selectors = {}
-
         # The positional CLI routing needs an input entry per evaluation (a measure of the
         # prediction alone, a field's Jacobian, has no reference); otherwise keep the static fallback.
         dynamic = bool(evaluations_inputs) and all(len(inputs) >= 1 for inputs in evaluations_inputs.values())
+        self._evaluation_input_selectors = self._fill_tabs(
+            self._evaluation_tabs, evaluations_inputs if dynamic else {}, "Eval"
+        )
         self._evaluation_tabs.setVisible(dynamic)
         for widget in (
             self.ui.label_outputVolume,
@@ -149,27 +204,6 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
             self.ui.label_refMask.setVisible(True)
             self.ui.referenceMaskSelector.setVisible(True)
             return
-
-        for evaluation_key, evaluation_inputs in evaluations_inputs.items():
-            tab = QWidget()
-            root = QVBoxLayout(tab)
-            root.setContentsMargins(12, 12, 12, 12)
-            form = QFormLayout()
-            form.setContentsMargins(0, 0, 0, 0)
-            selectors = io_selectors.add_inputs_on_layout(form, evaluation_inputs)
-            root.addLayout(form)
-            root.addStretch(1)
-            self._evaluation_tabs.addTab(tab, evaluation_key.display_name)
-            self._evaluation_input_selectors[evaluation_key] = selectors
-
-            # Persist selections under Eval/{evaluation_file}/{key} and restore them
-            for key, (_required, selector) in selectors.items():
-                param_key = f"Eval/{evaluation_key.evaluation_file}/{key}"
-                selector.connect(
-                    "currentNodeChanged(vtkMRMLNode*)",
-                    lambda node, pk=param_key: self._on_evaluation_selector_changed(pk, node),
-                )
-                selector.setCurrentNode(self.get_parameter_node(param_key))
 
         # The shared static mask row only stays when no evaluation declares its own Mask_* entry
         declares_mask = any(
@@ -191,6 +225,20 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
         if 0 <= index < len(keys):
             return keys[index]
         return None
+
+    def _current_uncertainty_key(self):
+        """The EvaluationKey of the current uncertainty tab, or None for an app that declares none."""
+        keys = list(self._uncertainty_input_selectors.keys())
+        index = self._uncertainty_tabs.currentIndex
+        return keys[index] if 0 <= index < len(keys) else None
+
+    def uncertainty_inputs_ok(self) -> bool:
+        """Whether the current uncertainty tab has every reference it requires."""
+        key = self._current_uncertainty_key()
+        return key is None or all(
+            not required or io_selectors.has_selection(selector)
+            for required, selector in self._uncertainty_input_selectors[key].values()
+        )
 
     def evaluation_inputs_ok(self) -> bool:
         """
@@ -295,6 +343,32 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
         volume_storage_node.UseCompressionOff()
         volume_storage_node.WriteData(node)
         volume_storage_node.UnRegister(None)
+
+    def _save_entry(self, key: str, node) -> str:
+        """Write ``node`` as it is under the work folder, named after its entry: a transform as ``.h5``, landmarks
+        as ``.fcsv``, a volume or label map as ``.mha``. Returns the file name."""
+        if node.IsA("vtkMRMLTransformNode") or node.IsA("vtkMRMLMarkupsNode"):
+            file_name = key + (".h5" if node.IsA("vtkMRMLTransformNode") else ".fcsv")
+            slicer.util.saveNode(node, str(self._work_dir / file_name))
+        else:
+            file_name = f"{key}.mha"
+            self._write_volume(node, self._work_dir / file_name)
+        return file_name
+
+    def write_stack(self, sequence_node, path: Path) -> None:
+        """Write the sequence's members as the stack konfai-apps reads: their channels member-major (a vector
+        volume, a displacement field, is one member of several), their count and the field mark in the header."""
+        images = [node_image(sequence_node.GetNthDataNode(i)) for i in range(sequence_node.GetNumberOfDataNodes())]
+        arrays = []
+        for image in images:
+            array = sitk.GetArrayFromImage(image)
+            arrays.append(array if image.GetNumberOfComponentsPerPixel() > 1 else array[..., None])
+        stack = sitk.GetImageFromArray(np.concatenate(arrays, axis=-1), isVector=True)
+        stack.CopyInformation(images[0])
+        stack.SetMetaData("konfai_members", str(len(images)))
+        if sequence_node.GetAttribute("KonfAI.DisplacementField"):
+            stack.SetMetaData("konfai_displacement_field", "true")
+        sitk.WriteImage(stack, str(path))
 
     def _export_resampled(self, node, reference_node, transform_node, path: Path, nearest: bool) -> None:
         """Resample ``node`` onto ``reference_node`` through ``transform_node`` and write it to ``path``."""
@@ -467,14 +541,14 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
         self.uncertainty_panel.clear_metrics()
 
         app = self.template.ui.appComboBox.currentData
-        args = [
-            "uncertainty",
-            app.get_name(),
-            "-i",
-            "Volume.mha",
-            "-o",
-            "Uncertainty",
-        ]
+        args = ["uncertainty", app.get_name(), "-i", "Volume.mha", "-o", "Uncertainty"]
+        # The current tab's config, and its references in the manifest order: Reference_0, Reference_1...
+        key = self._current_uncertainty_key()
+        if key is not None:
+            args += ["--uncertainty_file", key.evaluation_file]
+            for name, (_required, selector) in self._uncertainty_input_selectors[key].items():
+                if selector.currentNode() is not None:
+                    args += ["--gt", self._save_entry(name, selector.currentNode())]
 
         # Device selection (GPU or CPU)
         if devices:
@@ -485,17 +559,7 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
         if remote_server is not None:
             args += remote_server.cli_args()
 
-        n = self.ui.inputVolumeSequenceSelector.currentNode().GetNumberOfDataNodes()
-        images = [
-            sitkUtils.PullVolumeFromSlicer(self.ui.inputVolumeSequenceSelector.currentNode().GetNthDataNode(i))
-            for i in range(n)
-        ]
-        arrays = [sitk.GetArrayFromImage(img) for img in images]
-        stack = np.stack(arrays, axis=-1)
-        image = sitk.GetImageFromArray(stack, isVector=True)
-        image.CopyInformation(images[0])
-
-        sitk.WriteImage(image, str(self._work_dir / "Volume.mha"))
+        self.write_stack(self.ui.inputVolumeSequenceSelector.currentNode(), self._work_dir / "Volume.mha")
 
         def on_end_function() -> None:
             """
