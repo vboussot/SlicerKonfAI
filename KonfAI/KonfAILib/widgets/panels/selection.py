@@ -104,6 +104,7 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         self.ui.descriptionCard.toolTip = _("Click to expand or collapse the description.")
 
         self.ui.appComboBox.currentIndexChanged.connect(self.on_app_selected)
+        self.ui.presetComboBox.currentIndexChanged.connect(self.on_preset_selected)
 
         self.app_local_repositoy: list[str] = []
 
@@ -289,6 +290,27 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
 
         self.set_parameter("App", app.get_name())
         self.template.dispatch_app_changed(app)
+        self.refresh_presets(app)
+
+    def refresh_presets(self, app, select: str | None = None) -> None:
+        """List the app's presets under the app selector, ``select`` chosen (else its base config); the row only
+        shows for an app that has presets."""
+        presets = app.get_presets() if hasattr(app, "get_presets") else {}
+        combo = self.ui.presetComboBox
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(_("Base config"), None)
+        for name, preset in presets.items():
+            combo.addItem(name, name)
+            combo.setItemData(combo.count - 1, preset.description, Qt.ToolTipRole)
+        combo.setCurrentIndex(max(combo.findData(select), 0) if select else 0)
+        combo.blockSignals(False)
+        self.ui.label_preset.setVisible(bool(presets))
+        combo.setVisible(bool(presets))
+
+    def on_preset_selected(self, index: int) -> None:
+        """Run the app with the chosen preset: the inference panel starts its parameters from it."""
+        self.template.inference_panel.set_preset(self.ui.presetComboBox.itemData(index))
 
     def _refresh_selected_app_metadata(self):
         """

@@ -236,26 +236,8 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         # constraint (choices -> dropdown, {min,max} -> spin bounds). A nested value such as the per-resolution
         # `resolutions` matrix is just one entry, edited by the same recursive editor — no special case. No
         # app.json declaration is needed; "Save as preset" keeps the current values as a preset of the app.
+        # The parameters start from the preset chosen under the app selector: an edit is a --set after its own.
         presets = app.get_presets() if (app is not None and hasattr(app, "get_presets")) else {}
-        if presets:
-            # A preset is a named list of --set: the parameters below start from it, and an edit is a --set after it.
-            add_section("Preset")
-            preset_combo = qt.QComboBox()
-            preset_combo.addItem("Base config", None)
-            for preset_name, preset in presets.items():
-                preset_combo.addItem(preset_name, preset_name)
-                preset_combo.setItemData(preset_combo.count - 1, preset.description, qt.Qt.ToolTipRole)
-            preset_combo.setCurrentIndex(max(preset_combo.findData(self._preset), 0))
-
-            def _on_preset_changed(index):
-                self._preset = preset_combo.itemData(index)
-                self._param_override = {}  # edits were relative to the preset they were made on
-                self._refresh_advanced_button()
-                dialog.reject()
-                self.on_advanced_clicked()  # reopen on the new preset's values
-
-            preset_combo.currentIndexChanged.connect(_on_preset_changed)
-            add_card().addRow("Preset:", preset_combo)
         try:
             if hasattr(app, "use_preset"):
                 app.use_preset(self._preset if self._preset in presets else None)
@@ -656,8 +638,18 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             return
         self._preset, self._param_override = name.strip(), {}
         self._refresh_advanced_button()
+        self.template.selection_panel.refresh_presets(app, select=self._preset)
         self._update_logs(f"[KonfAI] Saved preset '{name.strip()}' of {app.get_name()} in {written}.")
         dialog.accept()
+
+    def set_preset(self, preset: str | None) -> None:
+        """Run the app with ``preset`` (None: its base config), chosen under the app selector. Tuned parameters were
+        edits of the previous preset: they go."""
+        self._preset, self._param_override = preset, {}
+        app = self.template.ui.appComboBox.currentData
+        if app is not None and hasattr(app, "use_preset"):
+            app.use_preset(preset)
+        self._refresh_advanced_button()
 
     def on_app_changed(self, app) -> None:
         """
