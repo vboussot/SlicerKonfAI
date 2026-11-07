@@ -246,14 +246,15 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             params = {}
         values = params.get("values") or {}
         constraints = params.get("constraints") or {}
-        param_widgets: list[tuple[str, object, object]] = []
+        param_widgets: list[tuple[str, object, object, object, object]] = []
         if values:
             add_section("Model parameters")
             scalars = None  # scalar rows share one card; a nested block in between starts a fresh one
             for name, default in values.items():
                 current = self._param_override.get(name, default)
                 widget, reader = self._build_value_editor(current, constraints.get(name), name)
-                param_widgets.append((name, default, reader))
+                # What the editor reads back untouched: a value it cannot show exactly is still no edit.
+                param_widgets.append((name, default, current, reader(), reader))
                 if isinstance(default, (dict, list)):
                     # A nested / repeatable value (e.g. the resolutions matrix) takes the full width on the
                     # gray canvas, its name a header above — its own inner cards carry the hierarchy.
@@ -450,7 +451,8 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
                 combo.setMinimumWidth(240)  # wide enough to read a full model ref without truncation
                 combo.addItems([str(option) for option in choices])
                 combo.setCurrentText(str(v))
-                return combo, (lambda: combo.currentText)
+                # The choice itself (an int stays an int), else the text typed in.
+                return combo, (lambda: next((o for o in choices if str(o) == combo.currentText), combo.currentText))
             if isinstance(v, bool):  # bool before int (bool is a subclass of int)
                 w = qt.QCheckBox()
                 w.setChecked(v)
@@ -473,6 +475,22 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             if isinstance(v, str):
                 w = qt.QLineEdit(str(v))
                 return w, (lambda: w.text)
+            if v is None:  # unset (an optional parameter): empty stays None, a number reads as one
+                w = qt.QLineEdit()
+                w.setPlaceholderText("None")
+
+                def read_optional():
+                    text = w.text.strip()
+                    if not text:
+                        return None
+                    for kind in (int, float):
+                        try:
+                            return kind(text)
+                        except ValueError:
+                            pass
+                    return text
+
+                return w, read_optional
             # list of scalars (or empty): comma-separated, element type inferred for the round-trip
             as_list = v if isinstance(v, list) else []
             bools = any(isinstance(item, bool) for item in as_list)
@@ -607,10 +625,14 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         return container, (lambda: like(value, to_output(state["read"]())))
 
     def _collect_param_overrides(self, param_widgets) -> dict:
-        """Keep only the parameters whose edited value differs from the config default."""
+        """Keep only the parameters whose value differs from the config default. A parameter the user did not
+        touch keeps the value it was shown with: an editor that reads a value back in another form (None as an
+        empty list, an empty mapping as []) must not turn it into a --set the app refuses."""
         overrides: dict = {}
-        for name, default, reader in param_widgets:
+        for name, default, current, untouched, reader in param_widgets:
             value = reader()
+            if value == untouched:
+                value = current
             if value is not None and value != default:
                 overrides[name] = value
         return overrides
