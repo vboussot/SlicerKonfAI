@@ -594,8 +594,17 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             state["read"] = read
             outer.addWidget(widget)
 
+        def like(original, node):
+            # A dict-of-objects edits as a list, and an empty one reads back as []: give it back as the mapping it
+            # was ({}), so an untouched `levels: {}` is no edit, and a --set of it no list where a mapping goes.
+            if isinstance(original, dict) and node == []:
+                return {}
+            if isinstance(original, dict) and isinstance(node, dict):
+                return {key: like(original.get(key), val) for key, val in node.items()}
+            return node
+
         rebuild()
-        return container, (lambda: to_output(state["read"]()))
+        return container, (lambda: like(value, to_output(state["read"]())))
 
     def _collect_param_overrides(self, param_widgets) -> dict:
         """Keep only the parameters whose edited value differs from the config default."""
