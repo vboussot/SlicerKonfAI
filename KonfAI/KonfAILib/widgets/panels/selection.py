@@ -17,6 +17,7 @@
 """App selection panel: app list population (Hugging Face, remote server,
 local folders), app management actions and description display."""
 
+import html
 import json
 import os
 import re
@@ -307,10 +308,12 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         combo.blockSignals(False)
         self.ui.label_preset.setVisible(bool(presets))
         combo.setVisible(bool(presets))
+        self._show_description()
 
     def on_preset_selected(self, index: int) -> None:
         """Run the app with the chosen preset: the inference panel starts its parameters from it."""
         self.template.inference_panel.set_preset(self.ui.presetComboBox.itemData(index))
+        self._show_description()
 
     def _refresh_selected_app_metadata(self):
         """
@@ -346,12 +349,26 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         if not app:
             return
 
-        if self._description_expanded:
-            self.ui.appDescriptionLabel.setText(app.get_description())
-        else:
-            self.ui.appDescriptionLabel.setText(app.get_short_description())
-
+        self.ui.appDescriptionLabel.setText(self._description(full=self._description_expanded))
         self._description_expanded = not self._description_expanded
+
+    def _description(self, full: bool) -> str:
+        """The app's description, short or full, then the chosen preset's: what the run will do."""
+        app = self.ui.appComboBox.currentData
+        text = app.get_description() if full else app.get_short_description()
+        preset = self.ui.presetComboBox.currentData
+        presets = app.get_presets() if preset and hasattr(app, "get_presets") else {}
+        if preset not in presets:
+            return text
+        # One rich text: a plain description keeps its line breaks, an HTML one (links) is kept as it is.
+        body = text if "<" in text else html.escape(text).replace("\n", "<br>")
+        preset_text = html.escape(presets[preset].description or "")
+        return f"{body}<br><br><b>Preset {html.escape(preset)}</b>" + (f": {preset_text}" if preset_text else "")
+
+    def _show_description(self) -> None:
+        """Redraw the description as it is shown now, short or full (the toggle holds the next state)."""
+        if self.ui.appComboBox.currentData is not None:
+            self.ui.appDescriptionLabel.setText(self._description(full=not self._description_expanded))
 
     def on_remove_app(self) -> None:
         """
