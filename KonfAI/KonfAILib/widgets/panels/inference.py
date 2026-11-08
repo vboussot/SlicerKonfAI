@@ -684,7 +684,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         if not name or not name.strip():
             return
         description = qt.QInputDialog.getText(None, "Save as preset", "What it is for:") or ""
-        chosen = app.get_presets().get(self._preset) if self._preset else None
+        chosen = app.get_presets().get(self._preset)
         edits = self._collect_param_overrides(param_widgets)
         overrides = [
             *(chosen.overrides if chosen else ()),
