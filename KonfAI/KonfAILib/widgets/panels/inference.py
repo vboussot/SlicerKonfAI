@@ -37,15 +37,6 @@ from KonfAILib.widgets.panels.base import KonfAIAppPanel
 if TYPE_CHECKING:
     from KonfAILib.widgets.app_template import KonfAIAppTemplateWidget
 
-#: konfai's header key for an ensemble stack's member count, and its displacement-field mark.
-MEMBERS_KEY = "konfai_members"
-FIELD_KEY = "konfai_displacement_field"
-
-
-def is_stack(path: Path) -> bool:
-    """Whether ``path`` is an ensemble's stack, ``InferenceStack`` in whatever form."""
-    return path.name.split(".")[0] == "InferenceStack"
-
 
 class KonfAIAppInferencePanel(KonfAIAppPanel):
     """
@@ -123,7 +114,11 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         self._references_label = qt.QLabel(_("Presets"))
         self.ui.formLayout_inputs.insertRow(4, self._references_label, self._references_widget)  # above Sampling
         self.reference_selector = ChipSelector(
-            self._references_combo, references_chips, None, 1, on_change=lambda _selected: self._on_references()
+            self._references_combo,
+            references_chips,
+            None,
+            1,
+            on_change=lambda _selected: self._update_uncertainty_visibility(),
         )
 
     def _update_uncertainty_visibility(self) -> None:
@@ -738,14 +733,14 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             candidates += [self._reference(other, preset) for preset in presets] or [other.get_name()]
         return candidates
 
-    def _seed_references(self, app) -> None:
-        """Start the ensemble from the reference chosen under the app selector; the row shows when there is another
-        to add."""
+    def _seed_references(self, app, others: list[str] = ()) -> None:
+        """Start the ensemble from the reference chosen under the app selector, then ``others`` still offered; the row
+        shows when there is another to add."""
         chosen = self._reference(app, self._preset)
         candidates = self._reference_candidates(app)
         if chosen not in candidates:
             candidates.insert(0, chosen)
-        self.reference_selector.update(candidates, candidates, [chosen])
+        self.reference_selector.update(candidates, candidates, [chosen, *(r for r in others if r in candidates)])
         self._references_label.setVisible(len(candidates) > 1)
         self._references_widget.setVisible(len(candidates) > 1)
 
@@ -753,8 +748,26 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         """The app references the run ensembles, the one chosen under the app selector first."""
         return self.reference_selector.selected()
 
-    def _on_references(self) -> None:
-        self._update_uncertainty_visibility()
+    def state(self) -> dict:
+        """What the user chose for the app (its preset, the ensemble's references, the Advanced overrides): a refresh
+        of the app's metadata after a run gives it back (:meth:`restore`)."""
+        return {
+            "preset": self._preset,
+            "references": self.references(),
+            "overrides": (dict(self._param_override), self._patch_override, self._batch_override),
+        }
+
+    def restore(self, state: dict) -> None:
+        """Choose again what :meth:`state` kept, on the app as it was refreshed."""
+        app = self.template.ui.appComboBox.currentData
+        if app is None:
+            return
+        if state["preset"]:
+            self.template.selection_panel.refresh_presets(app, select=state["preset"])
+            self.set_preset(state["preset"])
+        self._param_override, self._patch_override, self._batch_override = state["overrides"]
+        self._refresh_advanced_button()
+        self._seed_references(app, state["references"][1:])
 
     def on_app_changed(self, app) -> None:
         """
@@ -1061,6 +1074,8 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
 
             data = None
             # Find the first non-stack MHA output file
+            from konfai_apps.ensemble import is_stack
+
             for file in (self._work_dir / "Output").rglob("*.mha"):
                 if not is_stack(file):
                     from konfai.utils.dataset import image_to_data
@@ -1188,12 +1203,11 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
                 )
 
             stacks = sorted(path for path in (self._work_dir / "Output").rglob("InferenceStack.*") if path.is_file())
-            if stacks:
-                record = self._work_dir / "Output" / "konfai-run.json"
-                names = json.loads(record.read_text()).get("members") if record.is_file() else None
-                sequence_node = self.load_stack(stacks[0], names)
-                for key, value in attr.items() if sequence_node is not None else ():
-                    sequence_node.SetAttribute(key.split("_")[0], str(value))  # App, NumberOf*: the run's summary
+            record = self._work_dir / "Output" / "konfai-run.json"
+            names = json.loads(record.read_text()).get("members") if record.is_file() else None
+            sequence_node = self.load_stack(stacks[0], names) if stacks else self.clear_stack()
+            for key, value in attr.items() if sequence_node is not None else ():
+                sequence_node.SetAttribute(key.split("_")[0], str(value))  # App, NumberOf*: the run's summary
 
         self.process.run("konfai-apps", self._work_dir, args, on_end_function)
 
@@ -1204,11 +1218,15 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         without it is one member a channel): a member of several channels, a displacement field, is one vector
         volume. ``names`` (konfai-run.json's members) name them. The sequence keeps the count and the field mark,
         which the uncertainty panel writes back into the stack it hands konfai-apps."""
+        from konfai.data.transform.ensemble import MEMBERS_ATTRIBUTE
+        from konfai.utils.dataset import DISPLACEMENT_FIELD_ATTRIBUTE
+
         stack = sitk.ReadImage(str(path))
         channels = stack.GetNumberOfComponentsPerPixel()
-        members = int(float(stack.GetMetaData(MEMBERS_KEY))) if stack.HasMetaDataKey(MEMBERS_KEY) else channels
+        has_count = stack.HasMetaDataKey(MEMBERS_ATTRIBUTE)
+        members = int(float(stack.GetMetaData(MEMBERS_ATTRIBUTE))) if has_count else channels
         if members < 2 or channels % members:
-            return None
+            return self.clear_stack()
         per_member = channels // members
         data = sitk.GetArrayFromImage(stack)
         if channels == 1:
@@ -1231,9 +1249,17 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             )
             sequence_node.SetDataNodeAtValue(node, str(member))
             slicer.mrmlScene.RemoveNode(node)
-        sequence_node.SetAttribute("KonfAI.Members", str(members))
-        sequence_node.SetAttribute("KonfAI.DisplacementField", "1" if stack.HasMetaDataKey(FIELD_KEY) else "")
+        field = stack.HasMetaDataKey(DISPLACEMENT_FIELD_ATTRIBUTE)
+        sequence_node.SetAttribute("KonfAI.DisplacementField", "1" if field else "")
         browser_node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSequenceBrowserNode", "InferenceStackBrowser")
         browser_node.SetAndObserveMasterSequenceNodeID(sequence_node.GetID())
         self.template.update_gui_from_parameter_node()
         return sequence_node
+
+    def clear_stack(self) -> None:
+        """Empty the uncertainty panel's sequence: a run without a stack leaves none of the previous run's members to
+        measure."""
+        sequence_node = self.template.ui.inputVolumeSequenceSelector.currentNode()
+        if sequence_node is not None:
+            sequence_node.RemoveAllDataNodes()
+        self.template.update_gui_from_parameter_node()

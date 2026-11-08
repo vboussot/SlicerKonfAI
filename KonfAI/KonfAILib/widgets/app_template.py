@@ -550,8 +550,11 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             ):
                 self.ui.runEvaluationButton.toolTip = _("Start uncertainty estimation")
                 self.ui.runEvaluationButton.enabled = True
+            elif inference_stack_volume and inference_stack_volume.GetNumberOfDataNodes() > 1:
+                self.ui.runEvaluationButton.toolTip = _("Select the references this uncertainty tab requires")
+                self.ui.runEvaluationButton.enabled = False
             else:
-                self.ui.runEvaluationButton.toolTip = _("Select input volume")
+                self.ui.runEvaluationButton.toolTip = _("Run an inference with several members and Uncertainty ticked")
                 self.ui.runEvaluationButton.enabled = False
 
         # Suggest an output volume base name derived from input volume name

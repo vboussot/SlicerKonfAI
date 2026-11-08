@@ -365,9 +365,12 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
             arrays.append(array if image.GetNumberOfComponentsPerPixel() > 1 else array[..., None])
         stack = sitk.GetImageFromArray(np.concatenate(arrays, axis=-1), isVector=True)
         stack.CopyInformation(images[0])
-        stack.SetMetaData("konfai_members", str(len(images)))
+        from konfai.data.transform.ensemble import MEMBERS_ATTRIBUTE
+        from konfai.utils.dataset import DISPLACEMENT_FIELD_ATTRIBUTE
+
+        stack.SetMetaData(MEMBERS_ATTRIBUTE, str(len(images)))
         if sequence_node.GetAttribute("KonfAI.DisplacementField"):
-            stack.SetMetaData("konfai_displacement_field", "true")
+            stack.SetMetaData(DISPLACEMENT_FIELD_ATTRIBUTE, "true")
         sitk.WriteImage(stack, str(path))
 
     def _export_resampled(self, node, reference_node, transform_node, path: Path, nearest: bool) -> None:
@@ -458,21 +461,18 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
                     flag = "-i"
                 else:
                     flag = "--mask" if key.startswith("Mask") else "--gt"
-                if node.IsA("vtkMRMLTransformNode") or node.IsA("vtkMRMLMarkupsNode"):
-                    file_name = key + (".h5" if node.IsA("vtkMRMLTransformNode") else ".fcsv")
-                    slicer.util.saveNode(node, str(self._work_dir / file_name))
+                plain = node.IsA("vtkMRMLTransformNode") or node.IsA("vtkMRMLMarkupsNode")
+                if plain or flag == "--gt" or reference_node is None:
+                    file_name = self._save_entry(key, node)
                 else:
                     file_name = f"{key}.mha"
-                    if flag == "--gt" or reference_node is None:
-                        self._write_volume(node, self._work_dir / file_name)
-                    else:
-                        self._export_resampled(
-                            node,
-                            reference_node,
-                            transform_node,
-                            self._work_dir / file_name,
-                            nearest=flag == "--mask" or node.IsA("vtkMRMLLabelMapVolumeNode"),
-                        )
+                    self._export_resampled(
+                        node,
+                        reference_node,
+                        transform_node,
+                        self._work_dir / file_name,
+                        nearest=flag == "--mask" or node.IsA("vtkMRMLLabelMapVolumeNode"),
+                    )
                 args += [flag, file_name]
 
             # Shared static mask, kept when the evaluation declares no Mask_* entry

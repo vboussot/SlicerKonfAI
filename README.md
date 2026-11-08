@@ -64,8 +64,8 @@ https://github.com/user-attachments/assets/d3728d16-1004-4100-9e8a-f31b8e72ed75
 - **Quality assurance, with or without a reference**
   *With reference*: the app's evaluation workflow (Dice, MAE, PSNR, SSIM and the maps it defines), with an optional mask and a transform to align the output. *No reference*: the app's uncertainty workflows on the inference stack, one tab per workflow the app declares (`inputs_uncertainties`), each with the references it reads: the spread of the members alone, of landmarks pushed through them, the disagreement of a segmentation they propagate.
 
-- **Advanced settings and local apps**
-  Override the patch size and the batch size, edit the parameters the app exposes, restore the defaults, or save the current settings as a new local app. Scaffold a fine-tuning app from any app that ships its training configuration.
+- **Advanced settings and presets**
+  Override the patch size and the batch size, edit the parameters the app exposes, restore the defaults, or save the current settings as a preset of the app. Scaffold a fine-tuning app from any app that ships its training configuration.
 
 - **Local GPU, CPU or remote server**
   The device row lists the CPU and every GPU combination. A `konfai-apps-server` on another machine runs the same apps: add it with its host, port and token (kept in the OS keyring), pick one of its GPUs, and the RAM and VRAM gauges show its memory.
