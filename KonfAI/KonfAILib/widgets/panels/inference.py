@@ -749,11 +749,12 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         return self.reference_selector.selected()
 
     def state(self) -> dict:
-        """What the user chose for the app (its preset, the ensemble's references, the Advanced overrides): a refresh
-        of the app's metadata after a run gives it back (:meth:`restore`)."""
+        """What the user chose for the app (its preset, the ensemble's references, Uncertainty, the Advanced overrides):
+        a refresh of the app's metadata after a run gives it back (:meth:`restore`)."""
         return {
             "preset": self._preset,
             "references": self.references(),
+            "uncertainty": self.ui.uncertaintyCheckBox.isChecked(),
             "overrides": (dict(self._param_override), self._patch_override, self._batch_override),
         }
 
@@ -771,6 +772,9 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         self._param_override = tuned if kept else {}
         self._refresh_advanced_button()
         self._seed_references(app, state["references"])
+        # The refresh seeded one reference and so unticked Uncertainty: tick it again, unticked if the run samples once.
+        self.ui.uncertaintyCheckBox.setChecked(state["uncertainty"])
+        self._update_uncertainty_visibility()
 
     def on_app_changed(self, app) -> None:
         """
