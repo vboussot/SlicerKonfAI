@@ -1213,8 +1213,9 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             record = self._work_dir / "Output" / "konfai-run.json"
             names = json.loads(record.read_text()).get("members") if record.is_file() else None
             sequence_node = self.load_stack(stacks[0], names) if stacks else self.clear_stack()
-            for key, value in attr.items() if sequence_node is not None else ():
-                sequence_node.SetAttribute(key.split("_")[0], str(value))  # App, NumberOf*: the run's summary
+            if sequence_node is not None:
+                for key, value in attr.items():
+                    sequence_node.SetAttribute(key.split("_")[0], str(value))  # App, NumberOf*: the run's summary
 
         self.process.run("konfai-apps", self._work_dir, args, on_end_function)
 
