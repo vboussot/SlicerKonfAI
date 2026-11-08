@@ -733,14 +733,14 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             candidates += [self._reference(other, preset) for preset in presets] or [other.get_name()]
         return candidates
 
-    def _seed_references(self, app, others: list[str] = ()) -> None:
-        """Start the ensemble from the reference chosen under the app selector, then ``others`` still offered; the row
-        shows when there is another to add."""
+    def _seed_references(self, app, selected: list[str] = ()) -> None:
+        """Start the ensemble from the references ``selected`` still offered, else from the one chosen under the app
+        selector; the row shows when there is another to add."""
         chosen = self._reference(app, self._preset)
         candidates = self._reference_candidates(app)
         if chosen not in candidates:
             candidates.insert(0, chosen)
-        self.reference_selector.update(candidates, candidates, [chosen, *(r for r in others if r in candidates)])
+        self.reference_selector.update(candidates, candidates, [r for r in selected if r in candidates] or [chosen])
         self._references_label.setVisible(len(candidates) > 1)
         self._references_widget.setVisible(len(candidates) > 1)
 
@@ -762,12 +762,15 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         app = self.template.ui.appComboBox.currentData
         if app is None:
             return
-        if state["preset"]:
+        # A preset the refresh no longer lists stays unchosen, and the parameters tuned from it go with it.
+        kept = state["preset"] is None or state["preset"] in (app.get_presets() if hasattr(app, "get_presets") else {})
+        if state["preset"] and kept:
             self.template.selection_panel.refresh_presets(app, select=state["preset"])
             self.set_preset(state["preset"])
-        self._param_override, self._patch_override, self._batch_override = state["overrides"]
+        tuned, self._patch_override, self._batch_override = state["overrides"]
+        self._param_override = tuned if kept else {}
         self._refresh_advanced_button()
-        self._seed_references(app, state["references"][1:])
+        self._seed_references(app, state["references"])
 
     def on_app_changed(self, app) -> None:
         """
