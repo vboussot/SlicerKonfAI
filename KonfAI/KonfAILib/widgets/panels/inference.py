@@ -682,6 +682,28 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             app.use_preset(preset)
         self._refresh_advanced_button()
 
+    def state(self) -> dict:
+        """What the user chose for the app (its preset, the Advanced overrides): a refresh of the app's metadata after a
+        run gives it back (:meth:`restore`)."""
+        return {
+            "preset": self._preset,
+            "overrides": (dict(self._param_override), self._patch_override, self._batch_override),
+        }
+
+    def restore(self, state: dict) -> None:
+        """Choose again what :meth:`state` kept, on the app as it was refreshed."""
+        app = self.template.ui.appComboBox.currentData
+        if app is None:
+            return
+        # A preset the refresh no longer lists stays unchosen, and the parameters tuned from it go with it.
+        kept = state["preset"] is None or state["preset"] in (app.get_presets() if hasattr(app, "get_presets") else {})
+        if state["preset"] and kept:
+            self.template.selection_panel.refresh_presets(app, select=state["preset"])
+            self.set_preset(state["preset"])
+        tuned, self._patch_override, self._batch_override = state["overrides"]
+        self._param_override = tuned if kept else {}
+        self._refresh_advanced_button()
+
     def on_app_changed(self, app) -> None:
         """
         Reconfigure the sampling controls when the selected app changes.

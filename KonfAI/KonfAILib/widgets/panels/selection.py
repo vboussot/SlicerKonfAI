@@ -338,7 +338,10 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         was_blocked = self.ui.appComboBox.blockSignals(True)
         self.ui.appComboBox.setItemData(index, refreshed_app)
         self.ui.appComboBox.blockSignals(was_blocked)
+        # The same app, its files refreshed: what the user chose for it (preset, Advanced) stays.
+        kept = self.template.inference_panel.state()
         self.on_app_selected()
+        self.template.inference_panel.restore(kept)
         return refreshed_app
 
     def on_toggle_description(self) -> None:
