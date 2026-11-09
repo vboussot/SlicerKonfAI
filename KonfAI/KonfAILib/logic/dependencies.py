@@ -129,10 +129,10 @@ def install_package(package: str, display_name: str) -> bool:
     return True
 
 
-#: The konfai and konfai-apps the extension runs: KonfAI's main from its presets on (fideus-labs/KonfAI#310), which no
-#: release ships yet. setuptools_scm versions main by its commits since 1.8.8: #310 is the 19th, 1.8.9.dev19. Until a
-#: release ships them, both come from KonfAI's main.
-KONFAI_APPS_REQUIRED = "1.8.9.dev19"
+#: The konfai and konfai-apps the extension runs: KonfAI's main from its ensembles on (fideus-labs/KonfAI#318, after
+#: the presets of #310), which no release ships yet. setuptools_scm versions main by its commits since 1.8.8: #318 is
+#: the 27th, 1.8.9.dev27. Until a release ships them, both come from KonfAI's main.
+KONFAI_APPS_REQUIRED = "1.8.9.dev27"
 KONFAI_MAIN = [
     "konfai[monitoring] @ git+https://github.com/fideus-labs/KonfAI@main",
     "konfai-apps @ git+https://github.com/fideus-labs/KonfAI@main#subdirectory=konfai-apps",
