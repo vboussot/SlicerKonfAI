@@ -680,11 +680,19 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
 
     def set_preset(self, preset: str | None) -> None:
         """Run the app with ``preset`` (None: its base config), chosen under the app selector. Tuned parameters were
-        edits of the previous preset: they go."""
-        self._preset, self._param_override = preset, {}
+        edits of the previous preset: they go. A preset the app's config no longer takes is refused with its reason,
+        and the previous choice and its edits stay."""
         app = self.template.ui.appComboBox.currentData
         if app is not None and hasattr(app, "use_preset"):
-            app.use_preset(preset)
+            try:
+                app.use_preset(preset)
+            except Exception as exc:  # noqa: BLE001 - surface a preset that no longer applies to the user
+                import qt
+
+                qt.QMessageBox.critical(None, "Preset", f"Could not choose the preset:\n{exc}")
+                self.template.selection_panel.refresh_presets(app, select=self._preset)
+                return
+        self._preset, self._param_override = preset, {}
         self._refresh_advanced_button()
 
     def state(self) -> dict:
@@ -705,6 +713,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         if state["preset"] and kept:
             self.template.selection_panel.refresh_presets(app, select=state["preset"])
             self.set_preset(state["preset"])
+            kept = self._preset == state["preset"]  # refused: it no longer applies to the refreshed app
         tuned, self._patch_override, self._batch_override = state["overrides"]
         self._param_override = tuned if kept else {}
         self._refresh_advanced_button()
