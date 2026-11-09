@@ -141,7 +141,7 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
         self.ui.qaTabWidget.setTabEnabled(1, has_uncertainty)
 
         self._rebuild_evaluation_tabs(app)
-        tabs = dict(getattr(app, "get_uncertainties_inputs", dict)())
+        tabs = app.get_uncertainties_inputs()
         self._uncertainty_input_selectors = self._fill_tabs(self._uncertainty_tabs, tabs, "Unc")
         self._uncertainty_tabs.setVisible(bool(tabs))
 
@@ -365,15 +365,11 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
             arrays.append(array if image.GetNumberOfComponentsPerPixel() > 1 else array[..., None])
         stack = sitk.GetImageFromArray(np.concatenate(arrays, axis=-1), isVector=True)
         stack.CopyInformation(images[0])
-        try:
-            from konfai.data.transform.ensemble import MEMBERS_ATTRIBUTE
-            from konfai.utils.dataset import DISPLACEMENT_FIELD_ATTRIBUTE
-        except ImportError:  # a konfai before its ensembles (fideus-labs/KonfAI#318): a member a channel, no header
-            MEMBERS_ATTRIBUTE = DISPLACEMENT_FIELD_ATTRIBUTE = ""  # noqa: N806 - konfai's names, absent
+        from konfai.data.transform.ensemble import MEMBERS_ATTRIBUTE
+        from konfai.utils.dataset import DISPLACEMENT_FIELD_ATTRIBUTE
 
-        if MEMBERS_ATTRIBUTE:
-            stack.SetMetaData(MEMBERS_ATTRIBUTE, str(len(images)))
-        if DISPLACEMENT_FIELD_ATTRIBUTE and sequence_node.GetAttribute("KonfAI.DisplacementField"):
+        stack.SetMetaData(MEMBERS_ATTRIBUTE, str(len(images)))
+        if sequence_node.GetAttribute("KonfAI.DisplacementField"):
             stack.SetMetaData(DISPLACEMENT_FIELD_ATTRIBUTE, "true")
         sitk.WriteImage(stack, str(path))
 

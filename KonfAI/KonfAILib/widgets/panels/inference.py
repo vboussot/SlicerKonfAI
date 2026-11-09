@@ -734,17 +734,16 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
     def _reference_candidates(self, app) -> list[str]:
         """The references an ensemble with ``app`` may take: every preset of every listed app whose outputs are
         ``app``'s (an app with no presets as itself); ``app`` alone when it declares no outputs to match."""
-        outputs = list(dict(getattr(app, "get_outputs", dict)()))
+        outputs = list(app.get_outputs())
         combo = self.template.ui.appComboBox
         candidates = []
         for index in range(combo.count):
             other = combo.itemData(index)
             if other is None or not (
-                other.get_name() == app.get_name()
-                or (outputs and list(dict(getattr(other, "get_outputs", dict)())) == outputs)
+                other.get_name() == app.get_name() or (outputs and list(other.get_outputs()) == outputs)
             ):
                 continue
-            presets = list(other.get_presets()) if hasattr(other, "get_presets") else []
+            presets = list(other.get_presets())
             candidates += [self._reference(other, preset) for preset in presets] or [other.get_name()]
         return candidates
 
@@ -1096,12 +1095,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
 
             data = None
             # Find the first non-stack MHA output file
-            try:
-                from konfai_apps.ensemble import is_stack
-            except ImportError:  # a konfai-apps before its ensembles (fideus-labs/KonfAI#318) names its stack so
-
-                def is_stack(path: Path) -> bool:
-                    return path.name == "InferenceStack.mha"
+            from konfai_apps.ensemble import is_stack
 
             for file in (self._work_dir / "Output").rglob("*.mha"):
                 if not is_stack(file):
@@ -1246,11 +1240,8 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         without it is one member a channel): a member of several channels, a displacement field, is one vector
         volume. ``names`` (konfai-run.json's members) name them. The sequence keeps the count and the field mark,
         which the uncertainty panel writes back into the stack it hands konfai-apps."""
-        try:
-            from konfai.data.transform.ensemble import MEMBERS_ATTRIBUTE
-            from konfai.utils.dataset import DISPLACEMENT_FIELD_ATTRIBUTE
-        except ImportError:  # a konfai before its ensembles (fideus-labs/KonfAI#318): no count, a member a channel
-            MEMBERS_ATTRIBUTE = DISPLACEMENT_FIELD_ATTRIBUTE = ""  # noqa: N806 - konfai's names, absent
+        from konfai.data.transform.ensemble import MEMBERS_ATTRIBUTE
+        from konfai.utils.dataset import DISPLACEMENT_FIELD_ATTRIBUTE
 
         stack = sitk.ReadImage(str(path))
         channels = stack.GetNumberOfComponentsPerPixel()
