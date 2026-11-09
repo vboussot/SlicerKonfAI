@@ -134,9 +134,9 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
         self._evaluation_tabs.clear()
         self._evaluation_input_selectors = {}
 
-        # The positional CLI routing needs at least an input and a reference
-        # entry per evaluation; otherwise keep the full static fallback.
-        dynamic = bool(evaluations_inputs) and all(len(inputs) >= 2 for inputs in evaluations_inputs.values())
+        # The positional CLI routing needs an input entry per evaluation (a measure of the
+        # prediction alone, a field's Jacobian, has no reference); otherwise keep the static fallback.
+        dynamic = bool(evaluations_inputs) and all(evaluations_inputs.values())
         self._evaluation_tabs.setVisible(dynamic)
         for widget in (
             self.ui.label_outputVolume,
@@ -361,13 +361,18 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
                 args += ["--mask", "Mask.mha"]
         else:
             # Dynamic mode: positional routing in the manifest order of the
-            # current internal tab (1st entry -> -i, 2nd entry -> --gt, then
-            # Mask* -> --mask, anything else -> an extra -i group).
+            # current internal tab (1st entry -> -i, Mask* -> --mask, every
+            # other entry -> a --gt group of its own).
             items = list(self._evaluation_input_selectors[evaluation_key].items())
             selectors = dict(items)
-            # The resampling reference is the node routed to --gt (2nd entry)
-            _gt_required, gt_selector = items[1][1]
-            reference_node = gt_selector.currentNode()
+            # An evaluation given the transform itself (a registration's) pulls the data through it in its
+            # config: every node goes as it is, resampled here it would be moved twice. Otherwise the
+            # resampling reference is the node routed to the first --gt (2nd entry).
+            takes_transform = any(
+                selector.currentNode() is not None and selector.currentNode().IsA("vtkMRMLTransformNode")
+                for _required, selector in selectors.values()
+            )
+            reference_node = items[1][1][1].currentNode() if len(items) > 1 and not takes_transform else None
             if reference_node is not None and not reference_node.IsA("vtkMRMLVolumeNode"):
                 reference_node = None
             args += ["-o", "Evaluation"]
@@ -377,10 +382,8 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
                     continue
                 if position == 0:
                     flag = "-i"
-                elif position == 1:
-                    flag = "--gt"
                 else:
-                    flag = "--mask" if key.startswith("Mask") else "-i"
+                    flag = "--mask" if key.startswith("Mask") else "--gt"
                 if node.IsA("vtkMRMLTransformNode") or node.IsA("vtkMRMLMarkupsNode"):
                     file_name = key + (".h5" if node.IsA("vtkMRMLTransformNode") else ".fcsv")
                     slicer.util.saveNode(node, str(self._work_dir / file_name))
