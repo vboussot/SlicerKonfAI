@@ -360,7 +360,7 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         app = self.ui.appComboBox.currentData
         text = app.get_description() if full else app.get_short_description()
         preset = self.ui.presetComboBox.currentData
-        presets = app.get_presets() if preset else {}
+        presets = app.get_presets()
         if preset not in presets:
             return text
         # One rich text: a plain description keeps its line breaks, an HTML one (links) is kept as it is.
