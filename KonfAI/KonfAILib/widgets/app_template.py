@@ -543,14 +543,11 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                 self.ui.runEvaluationButton.enabled = False
         else:
             # Uncertainty estimation: need a stack volume with more than one component
-            if (
-                inference_stack_volume
-                and inference_stack_volume.GetNumberOfDataNodes() > 1
-                and self.qa_panel.uncertainty_inputs_ok()
-            ):
+            has_stack = inference_stack_volume and inference_stack_volume.GetNumberOfDataNodes() > 1
+            if has_stack and self.qa_panel.uncertainty_inputs_ok():
                 self.ui.runEvaluationButton.toolTip = _("Start uncertainty estimation")
                 self.ui.runEvaluationButton.enabled = True
-            elif inference_stack_volume and inference_stack_volume.GetNumberOfDataNodes() > 1:
+            elif has_stack:
                 self.ui.runEvaluationButton.toolTip = _("Select the references this uncertainty tab requires")
                 self.ui.runEvaluationButton.enabled = False
             else:

@@ -1017,7 +1017,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         self.template.uncertainty_panel.clear_metrics()
 
         app = self.template.ui.appComboBox.currentData
-        references = self.references() or [self._reference(app, self._preset)]
+        references = self.references()
         # The checkpoints are this app's: references of another app run their own.
         checkpoints = self.chip_selector.selected()
         if any(reference.split("#")[0] != app.get_name() for reference in references):
@@ -1239,7 +1239,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
 
         self.process.run("konfai-apps", self._work_dir, args, on_end_function)
 
-    def load_stack(self, path: Path, names: list[str] | None = None):
+    def load_stack(self, path: Path, names: list[str] | None):
         """Load an ensemble's stack as the uncertainty panel's sequence, one volume per member.
 
         The stack holds its members' channels member-major, their count in its header (konfai_members; a stack

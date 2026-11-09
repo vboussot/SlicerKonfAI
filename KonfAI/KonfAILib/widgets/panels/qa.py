@@ -361,10 +361,7 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
         """Write the sequence's members as the stack konfai-apps reads: their channels member-major (a vector
         volume, a displacement field, is one member of several), their count and the field mark in the header."""
         images = [node_image(sequence_node.GetNthDataNode(i)) for i in range(sequence_node.GetNumberOfDataNodes())]
-        arrays = []
-        for image in images:
-            array = sitk.GetArrayFromImage(image)
-            arrays.append(array if image.GetNumberOfComponentsPerPixel() > 1 else array[..., None])
+        arrays = [array if array.ndim == 4 else array[..., None] for array in map(sitk.GetArrayFromImage, images)]
         stack = sitk.GetImageFromArray(np.concatenate(arrays, axis=-1), isVector=True)
         stack.CopyInformation(images[0])
         from konfai.data.transform.ensemble import MEMBERS_ATTRIBUTE
