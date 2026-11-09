@@ -265,10 +265,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         # `resolutions` matrix is just one entry, edited by the same recursive editor — no special case. No
         # app.json declaration is needed; "Save as preset" keeps the current values as a preset of the app.
         # The parameters start from the preset chosen under the app selector: an edit is a --set after its own.
-        presets = app.get_presets() if app is not None else {}
         try:
-            if app is not None:
-                app.use_preset(self._preset if self._preset in presets else None)
             params = app.get_parameters() if (app is not None and hasattr(app, "get_parameters")) else {}
         except Exception:  # noqa: BLE001 - a config/type read failure must not break the dialog
             params = {}
@@ -701,10 +698,8 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         except Exception as exc:  # noqa: BLE001 - surface a refused name or override to the user
             qt.QMessageBox.critical(None, "Save as preset", f"Could not save the preset:\n{exc}")
             return False
-        self._preset, self._param_override = name.strip(), {}
-        self._refresh_advanced_button()
-        self.template.selection_panel.refresh_presets(app, select=self._preset)
-        self._seed_references(app)
+        self.template.selection_panel.refresh_presets(app, select=name.strip())
+        self.set_preset(name.strip())
         self._update_logs(f"[KonfAI] Saved preset '{name.strip()}' of {app.get_name()} in {written}.")
         dialog.accept()
         return True
@@ -783,14 +778,12 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         app = self.template.ui.appComboBox.currentData
         if app is None:
             return
-        # A preset the refresh no longer lists stays unchosen, and the parameters tuned from it go with it.
-        kept = state["preset"] is None or state["preset"] in app.get_presets()
-        if state["preset"] and kept:
+        if state["preset"] in app.get_presets():
             self.template.selection_panel.refresh_presets(app, select=state["preset"])
             self.set_preset(state["preset"])
-            kept = self._preset == state["preset"]  # refused: it no longer applies to the refreshed app
+        # A preset the refresh no longer lists, or the app refuses, stays unchosen: the parameters tuned from it go.
         tuned, self._patch_override, self._batch_override = state["overrides"]
-        self._param_override = tuned if kept else {}
+        self._param_override = tuned if self._preset == state["preset"] else {}
         self._refresh_advanced_button()
         self._seed_references(app, state["references"])
         # The refresh seeded one reference and so unticked Uncertainty: tick it again, unticked if the run samples once.
