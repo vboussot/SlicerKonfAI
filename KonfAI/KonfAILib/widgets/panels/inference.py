@@ -100,8 +100,8 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         )
 
         # The app references the run ensembles (APP#PRESET), one run each: the preset chosen under the app selector
-        # and any other preset of it, or of an app with the same outputs. Every reference, times the checkpoints, TTA
-        # copies and MC-dropout draws above, is a member (konfai-apps infer APP#a APP#b ...).
+        # and any other preset of it, or of an app with the same inputs and outputs. Every reference, times the
+        # checkpoints, TTA copies and MC-dropout draws above, is a member (konfai-apps infer APP#a APP#b ...).
         self._references_combo = qt.QComboBox()
         self._references_combo.toolTip = _("Add a preset to the ensemble: each preset is a run of its own.")
         self._references_widget = qt.QWidget()
@@ -732,15 +732,17 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         return f"{app.get_name()}#{preset}" if preset else app.get_name()
 
     def _reference_candidates(self, app) -> list[str]:
-        """The references an ensemble with ``app`` may take: every preset of every listed app whose outputs are
-        ``app``'s (an app with no presets as itself); ``app`` alone when it declares no outputs to match."""
-        outputs = list(app.get_outputs())
+        """The references an ensemble with ``app`` may take: every preset of every listed app whose inputs and outputs
+        are ``app``'s, since every reference is given ``app``'s inputs (an app with no presets as itself); ``app``
+        alone when it declares no outputs to match."""
+        inputs, outputs = list(app.get_inputs()), list(app.get_outputs())
         combo = self.template.ui.appComboBox
         candidates = []
         for index in range(combo.count):
             other = combo.itemData(index)
             if other is None or not (
-                other.get_name() == app.get_name() or (outputs and list(other.get_outputs()) == outputs)
+                other.get_name() == app.get_name()
+                or (outputs and list(other.get_outputs()) == outputs and list(other.get_inputs()) == inputs)
             ):
                 continue
             presets = list(other.get_presets())
