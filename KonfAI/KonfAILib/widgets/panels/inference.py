@@ -303,12 +303,13 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             "Drop every override (patch, batch and model parameters) and reopen on the app's defaults."
         )
         footer.addWidget(reset_button)
-        saved: list[bool] = []  # a preset saved from the dialog holds its edits: they are no override of it
+        saved = False  # a preset saved from the dialog holds its edits: they are no override of it
         if values and hasattr(app, "save_preset"):
 
             def _on_save():
+                nonlocal saved
                 if self._save_as_preset(app, param_widgets, dialog):
-                    saved.append(True)
+                    saved = True
 
             save_button = qt.QPushButton("Save as preset…")
             save_button.setToolTip("Keep the current parameters as a preset of this app: a name for their --set.")
