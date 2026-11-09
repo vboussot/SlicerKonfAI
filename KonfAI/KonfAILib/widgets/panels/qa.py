@@ -144,6 +144,8 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
         tabs = app.get_uncertainties_inputs()
         self._uncertainty_input_selectors = self._fill_tabs(self._uncertainty_tabs, tabs, "Unc")
         self._uncertainty_tabs.setVisible(bool(tabs))
+        # The selectors' signals fired while the previous app's were still in place: check Run on the new ones.
+        self.template.update_gui_from_parameter_node()
 
     def _fill_tabs(self, tab_widget, tabs: dict, prefix: str) -> dict:
         """One tab of ``tab_widget`` per config of ``tabs`` ({EvaluationKey: entries}), a node selector per entry,
