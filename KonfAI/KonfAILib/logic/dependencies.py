@@ -129,9 +129,10 @@ def install_package(package: str, display_name: str) -> bool:
     return True
 
 
-#: The konfai-apps the extension runs: one with presets (fideus-labs/KonfAI#310), which no release ships yet. Until one
-#: does, konfai and konfai-apps come from KonfAI's main, which setuptools_scm versions past the last release, 1.8.8.
-KONFAI_APPS_REQUIRED = "1.8.9.dev0"
+#: The konfai and konfai-apps the extension runs: KonfAI's main from its presets on (fideus-labs/KonfAI#310), which no
+#: release ships yet. setuptools_scm versions main by its commits since 1.8.8: #310 is the 19th, 1.8.9.dev19. Until a
+#: release ships them, both come from KonfAI's main.
+KONFAI_APPS_REQUIRED = "1.8.9.dev19"
 KONFAI_MAIN = [
     "konfai[monitoring] @ git+https://github.com/fideus-labs/KonfAI@main",
     "konfai-apps @ git+https://github.com/fideus-labs/KonfAI@main#subdirectory=konfai-apps",
@@ -143,7 +144,8 @@ def install_konfai() -> bool:
     from KonfAILib.widgets.helpers import ask_user_to_install_dependency, slicer_wait_popup
 
     installed = get_installed_version("konfai-apps")
-    if installed is None or Version(installed) < Version(KONFAI_APPS_REQUIRED):
+    core = get_installed_version("konfai")
+    if any(version is None or Version(version) < Version(KONFAI_APPS_REQUIRED) for version in (installed, core)):
         if not ask_user_to_install_dependency(
             "KonfAI",
             f"KonfAI needs konfai-apps {KONFAI_APPS_REQUIRED} or newer (installed: {installed or 'none'}), which no "
