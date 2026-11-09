@@ -190,7 +190,7 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
 
         # The positional CLI routing needs an input entry per evaluation (a measure of the
         # prediction alone, a field's Jacobian, has no reference); otherwise keep the static fallback.
-        dynamic = bool(evaluations_inputs) and all(len(inputs) >= 1 for inputs in evaluations_inputs.values())
+        dynamic = bool(evaluations_inputs) and all(evaluations_inputs.values())
         self._evaluation_input_selectors = self._fill_tabs(
             self._evaluation_tabs, evaluations_inputs if dynamic else {}, "Eval"
         )
