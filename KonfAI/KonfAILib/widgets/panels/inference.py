@@ -399,6 +399,8 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         e.g. a feature-model ref ``VBoussot/impact-torchscript-models:MIND/R1D2_3D.pt`` (the ``:`` would
         otherwise read as a mapping) — and lists quote each string element the same way.
         """
+        if value is None:  # an unset entry of a nested value: YAML's null, not the string "None"
+            return "null"
         if isinstance(value, bool):
             return "true" if value else "false"
         if isinstance(value, str):
