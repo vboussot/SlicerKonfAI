@@ -220,27 +220,21 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
             return
         self.set_parameter_node(param_key, node.GetID() if node is not None else None)
 
-    def _current_evaluation_key(self):
-        """Return the EvaluationKey of the current internal tab, or None in static mode."""
-        keys = list(self._evaluation_input_selectors.keys())
-        index = self._evaluation_tabs.currentIndex
-        if 0 <= index < len(keys):
-            return keys[index]
-        return None
-
-    def _current_uncertainty_key(self):
-        """The EvaluationKey of the current uncertainty tab, or None for an app that declares none."""
-        keys = list(self._uncertainty_input_selectors.keys())
-        index = self._uncertainty_tabs.currentIndex
+    @staticmethod
+    def _current_key(tabs, selectors: dict):
+        """The EvaluationKey of the current tab, or None when the app declares none (static mode)."""
+        keys = list(selectors)
+        index = tabs.currentIndex
         return keys[index] if 0 <= index < len(keys) else None
+
+    @staticmethod
+    def _inputs_ok(selectors: dict) -> bool:
+        return all(not required or io_selectors.has_selection(selector) for required, selector in selectors.values())
 
     def uncertainty_inputs_ok(self) -> bool:
         """Whether the current uncertainty tab has every reference it requires."""
-        key = self._current_uncertainty_key()
-        return key is None or all(
-            not required or io_selectors.has_selection(selector)
-            for required, selector in self._uncertainty_input_selectors[key].values()
-        )
+        key = self._current_key(self._uncertainty_tabs, self._uncertainty_input_selectors)
+        return key is None or self._inputs_ok(self._uncertainty_input_selectors[key])
 
     def evaluation_inputs_ok(self) -> bool:
         """
@@ -249,15 +243,12 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
         Static mode keeps the historical rule (input and reference volumes);
         dynamic mode checks the required selectors of the current internal tab.
         """
-        evaluation_key = self._current_evaluation_key()
+        evaluation_key = self._current_key(self._evaluation_tabs, self._evaluation_input_selectors)
         if evaluation_key is None:
             return has_node_content(self.get_parameter_node("ReferenceVolume")) and has_node_content(
                 self.get_parameter_node("InputVolumeEvaluation")
             )
-        return all(
-            not required or io_selectors.has_selection(selector)
-            for required, selector in self._evaluation_input_selectors[evaluation_key].values()
-        )
+        return self._inputs_ok(self._evaluation_input_selectors[evaluation_key])
 
     def set_information(
         self,
@@ -410,7 +401,7 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
         app = self.template.ui.appComboBox.currentData
         args = ["eval", app.get_name()]
 
-        evaluation_key = self._current_evaluation_key()
+        evaluation_key = self._current_key(self._evaluation_tabs, self._evaluation_input_selectors)
         if evaluation_key is None:
             # Static fallback: single input/reference pair (and optional mask)
             input_volume_evaluation_node = self.ui.inputVolumeEvaluationSelector.currentNode()
@@ -542,7 +533,7 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
         app = self.template.ui.appComboBox.currentData
         args = ["uncertainty", app.get_name(), "-i", "Volume.mha", "-o", "Uncertainty"]
         # The current tab's config, and its references in the manifest order: Reference_0, Reference_1...
-        key = self._current_uncertainty_key()
+        key = self._current_key(self._uncertainty_tabs, self._uncertainty_input_selectors)
         if key is not None:
             args += ["--uncertainty_file", key.evaluation_file]
             for name, (_required, selector) in self._uncertainty_input_selectors[key].items():
