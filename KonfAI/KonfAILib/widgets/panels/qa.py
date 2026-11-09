@@ -583,8 +583,7 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
 
             statistics = Statistics(next((self._work_dir / "Uncertainty").rglob("*.json")))
             self.uncertainty_panel.set_metrics(statistics.read())
-            self.uncertainty_panel.refresh_images_list(
-                Path(next((self._work_dir / "Uncertainty").rglob("*.mha")).parent)
-            )
+            # A landmark workflow writes metrics alone: the list is then emptied, not left with the last run's maps.
+            self.uncertainty_panel.refresh_images_list(self._work_dir / "Uncertainty")
 
         self.process.run("konfai-apps", self._work_dir, args, on_end_function)
