@@ -275,12 +275,13 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             "Drop every override (patch, batch and model parameters) and reopen on the app's defaults."
         )
         footer.addWidget(reset_button)
-        saved: list[bool] = []  # a preset saved from the dialog holds its edits: they are no override of it
+        saved = False  # a preset saved from the dialog holds its edits: they are no override of it
         if values and hasattr(app, "save_preset"):
 
             def _on_save():
+                nonlocal saved
                 if self._save_as_preset(app, param_widgets, dialog):
-                    saved.append(True)
+                    saved = True
 
             save_button = qt.QPushButton("Save as preset…")
             save_button.setToolTip("Keep the current parameters as a preset of this app: a name for their --set.")
@@ -646,6 +647,9 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             args += ["--set", f"{name}={self._format_config_value(value)}"]
         return args
 
+    def _run_name(self, app) -> str:
+        return f"{app.get_name()}#{self._preset}" if self._preset else app.get_name()
+
     def _save_as_preset(self, app, param_widgets, dialog) -> bool:
         """Keep the current parameters as a preset of the app: the chosen preset's --set, then the edits.
 
@@ -935,7 +939,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         app = self.template.ui.appComboBox.currentData
         args = [
             "infer",
-            f"{app.get_name()}#{self._preset}" if self._preset else app.get_name(),
+            self._run_name(app),
             "-i",
             "Volume.mha",
             "-o",
@@ -985,7 +989,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         # Store KonfAI metadata in the MHA header
         sitk_image.SetMetaData(
             "App",
-            f"{app.get_name()}#{self._preset}" if self._preset else app.get_name(),
+            self._run_name(app),
         )
         sitk_image.SetMetaData("NumberOfEnsemble", f"{self.ui.ensembleSpinBox.value}")
         sitk_image.SetMetaData("NumberOfTTA", f"{self.ui.ttaSpinBox.value}")
