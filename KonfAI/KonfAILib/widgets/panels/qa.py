@@ -241,14 +241,17 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
         Return True when the active evaluation has all its required inputs.
 
         Static mode keeps the historical rule (input and reference volumes);
-        dynamic mode checks the required selectors of the current internal tab.
+        dynamic mode checks the required selectors of the current internal tab, and the first
+        one in any case: it is routed to -i, which an evaluation always needs.
         """
         evaluation_key = self._current_key(self._evaluation_tabs, self._evaluation_input_selectors)
         if evaluation_key is None:
             return has_node_content(self.get_parameter_node("ReferenceVolume")) and has_node_content(
                 self.get_parameter_node("InputVolumeEvaluation")
             )
-        return self._inputs_ok(self._evaluation_input_selectors[evaluation_key])
+        selectors = self._evaluation_input_selectors[evaluation_key]
+        first = next(iter(selectors.values()), None)
+        return self._inputs_ok(selectors) and (first is None or io_selectors.has_selection(first[1]))
 
     def set_information(
         self,
