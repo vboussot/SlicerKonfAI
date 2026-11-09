@@ -1095,7 +1095,12 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
 
             data = None
             # Find the first non-stack MHA output file
-            from konfai_apps.ensemble import is_stack
+            try:
+                from konfai_apps.ensemble import is_stack
+            except ImportError:  # a konfai-apps before its ensembles (fideus-labs/KonfAI#318) names its stack so
+
+                def is_stack(path: Path) -> bool:
+                    return path.name == "InferenceStack.mha"
 
             for file in (self._work_dir / "Output").rglob("*.mha"):
                 if not is_stack(file):
