@@ -733,16 +733,20 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
 
     def _reference_candidates(self, app) -> list[str]:
         """The references an ensemble with ``app`` may take: every preset of every listed app whose inputs and outputs
-        are ``app``'s, since every reference is given ``app``'s inputs (an app with no presets as itself); ``app``
-        alone when it declares no outputs to match."""
-        inputs, outputs = list(app.get_inputs()), list(app.get_outputs())
+        are ``app``'s, by name and kind, in order, since every reference is given ``app``'s inputs (an app with no
+        presets as itself); ``app`` alone when it declares no outputs to match."""
+
+        def entries(some_app) -> list:
+            groups = (some_app.get_inputs(), some_app.get_outputs())
+            return [(key, entry.volume_type) for group in groups for key, entry in group.items()]
+
+        own = entries(app)
         combo = self.template.ui.appComboBox
         candidates = []
         for index in range(combo.count):
             other = combo.itemData(index)
             if other is None or not (
-                other.get_name() == app.get_name()
-                or (outputs and list(other.get_outputs()) == outputs and list(other.get_inputs()) == inputs)
+                other.get_name() == app.get_name() or (app.get_outputs() and entries(other) == own)
             ):
                 continue
             presets = list(other.get_presets())
