@@ -1245,8 +1245,11 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         without it is one member a channel): a member of several channels, a displacement field, is one vector
         volume. ``names`` (konfai-run.json's members) name them. The sequence keeps the count and the field mark,
         which the uncertainty panel writes back into the stack it hands konfai-apps."""
-        from konfai.data.transform.ensemble import MEMBERS_ATTRIBUTE
-        from konfai.utils.dataset import DISPLACEMENT_FIELD_ATTRIBUTE
+        try:
+            from konfai.data.transform.ensemble import MEMBERS_ATTRIBUTE
+            from konfai.utils.dataset import DISPLACEMENT_FIELD_ATTRIBUTE
+        except ImportError:  # a konfai before its ensembles (fideus-labs/KonfAI#318): no count, a member a channel
+            MEMBERS_ATTRIBUTE = DISPLACEMENT_FIELD_ATTRIBUTE = ""  # noqa: N806 - konfai's names, absent
 
         stack = sitk.ReadImage(str(path))
         channels = stack.GetNumberOfComponentsPerPixel()

@@ -365,11 +365,15 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
             arrays.append(array if image.GetNumberOfComponentsPerPixel() > 1 else array[..., None])
         stack = sitk.GetImageFromArray(np.concatenate(arrays, axis=-1), isVector=True)
         stack.CopyInformation(images[0])
-        from konfai.data.transform.ensemble import MEMBERS_ATTRIBUTE
-        from konfai.utils.dataset import DISPLACEMENT_FIELD_ATTRIBUTE
+        try:
+            from konfai.data.transform.ensemble import MEMBERS_ATTRIBUTE
+            from konfai.utils.dataset import DISPLACEMENT_FIELD_ATTRIBUTE
+        except ImportError:  # a konfai before its ensembles (fideus-labs/KonfAI#318): a member a channel, no header
+            MEMBERS_ATTRIBUTE = DISPLACEMENT_FIELD_ATTRIBUTE = ""  # noqa: N806 - konfai's names, absent
 
-        stack.SetMetaData(MEMBERS_ATTRIBUTE, str(len(images)))
-        if sequence_node.GetAttribute("KonfAI.DisplacementField"):
+        if MEMBERS_ATTRIBUTE:
+            stack.SetMetaData(MEMBERS_ATTRIBUTE, str(len(images)))
+        if DISPLACEMENT_FIELD_ATTRIBUTE and sequence_node.GetAttribute("KonfAI.DisplacementField"):
             stack.SetMetaData(DISPLACEMENT_FIELD_ATTRIBUTE, "true")
         sitk.WriteImage(stack, str(path))
 
