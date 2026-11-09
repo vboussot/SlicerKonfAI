@@ -749,13 +749,15 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         return candidates
 
     def _seed_references(self, app, selected: list[str] = ()) -> None:
-        """Start the ensemble from the references ``selected`` still offered, else from the one chosen under the app
-        selector; the row shows when there is another to add."""
+        """Start the ensemble from the reference chosen under the app selector, which stays (the run, its settings and
+        its results are its own), and those of ``selected`` still offered; the row shows when there is another to add.
+        """
         chosen = self._reference(app, self._preset)
         candidates = self._reference_candidates(app)
         if chosen not in candidates:
             candidates.insert(0, chosen)
-        self.reference_selector.update(candidates, candidates, [r for r in selected if r in candidates] or [chosen])
+        self.reference_selector.locked = chosen
+        self.reference_selector.update(candidates, candidates, [chosen, *selected])  # those no longer offered drop
         self._references_label.setVisible(len(candidates) > 1)
         self._references_widget.setVisible(len(candidates) > 1)
 
