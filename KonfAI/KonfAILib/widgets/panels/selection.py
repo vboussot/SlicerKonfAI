@@ -296,7 +296,7 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
     def refresh_presets(self, app, select: str | None = None) -> None:
         """List the app's presets under the app selector, ``select`` chosen (else its base config); the row only
         shows for an app that has presets."""
-        presets = app.get_presets() if hasattr(app, "get_presets") else {}
+        presets = app.get_presets()
         combo = self.ui.presetComboBox
         combo.blockSignals(True)
         combo.clear()
@@ -360,7 +360,7 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         app = self.ui.appComboBox.currentData
         text = app.get_description() if full else app.get_short_description()
         preset = self.ui.presetComboBox.currentData
-        presets = app.get_presets() if preset and hasattr(app, "get_presets") else {}
+        presets = app.get_presets() if preset else {}
         if preset not in presets:
             return text
         # One rich text: a plain description keeps its line breaks, an HTML one (links) is kept as it is.

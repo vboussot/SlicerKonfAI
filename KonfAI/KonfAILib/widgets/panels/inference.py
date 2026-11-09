@@ -237,9 +237,9 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         # `resolutions` matrix is just one entry, edited by the same recursive editor — no special case. No
         # app.json declaration is needed; "Save as preset" keeps the current values as a preset of the app.
         # The parameters start from the preset chosen under the app selector: an edit is a --set after its own.
-        presets = app.get_presets() if (app is not None and hasattr(app, "get_presets")) else {}
+        presets = app.get_presets() if app is not None else {}
         try:
-            if hasattr(app, "use_preset"):
+            if app is not None:
                 app.use_preset(self._preset if self._preset in presets else None)
             params = app.get_parameters() if (app is not None and hasattr(app, "get_parameters")) else {}
         except Exception:  # noqa: BLE001 - a config/type read failure must not break the dialog
@@ -667,7 +667,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             *(chosen.overrides if chosen else ()),
             *(f"{key}={self._format_config_value(value)}" for key, value in edits.items()),
         ]
-        tiles = getattr(chosen, "tiles", True)  # the chosen preset's tiling policy goes with its --set
+        tiles = chosen.tiles if chosen else True  # the chosen preset's tiling policy goes with its --set
         try:
             written = app.save_preset(name.strip(), description.strip(), overrides, tiles=tiles)
         except Exception as exc:  # noqa: BLE001 - surface a refused name or override to the user
@@ -685,7 +685,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         edits of the previous preset: they go. A preset the app's config no longer takes is refused with its reason,
         and the previous choice and its edits stay."""
         app = self.template.ui.appComboBox.currentData
-        if app is not None and hasattr(app, "use_preset"):
+        if app is not None:
             try:
                 app.use_preset(preset)
             except Exception as exc:  # noqa: BLE001 - surface a preset that no longer applies to the user
@@ -711,7 +711,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         if app is None:
             return
         # A preset the refresh no longer lists stays unchosen, and the parameters tuned from it go with it.
-        kept = state["preset"] is None or state["preset"] in (app.get_presets() if hasattr(app, "get_presets") else {})
+        kept = state["preset"] is None or state["preset"] in app.get_presets()
         if state["preset"] and kept:
             self.template.selection_panel.refresh_presets(app, select=state["preset"])
             self.set_preset(state["preset"])
@@ -773,8 +773,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         self._batch_override = None
         self._param_override = {}
         self._preset = None
-        if hasattr(app, "use_preset"):
-            app.use_preset(None)
+        app.use_preset(None)
         self._refresh_advanced_button()
 
         # Uncertainty estimation availability depends on app capabilities and on the run being sampled
