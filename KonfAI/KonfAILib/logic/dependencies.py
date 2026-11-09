@@ -129,18 +129,40 @@ def install_package(package: str, display_name: str) -> bool:
     return True
 
 
+#: The konfai and konfai-apps the extension runs: KonfAI's main from its presets on (fideus-labs/KonfAI#310), which no
+#: release ships yet. setuptools_scm versions main by its commits since 1.8.8: #310 is the 19th, 1.8.9.dev19. Until a
+#: release ships them, both come from KonfAI's main.
+KONFAI_APPS_REQUIRED = "1.8.9.dev19"
+KONFAI_MAIN = [
+    "konfai[monitoring] @ git+https://github.com/fideus-labs/KonfAI@main",
+    "konfai-apps @ git+https://github.com/fideus-labs/KonfAI@main#subdirectory=konfai-apps",
+]
+
+
 def install_konfai() -> bool:
-    if not install_package("konfai-apps", "KonfAI"):
-        return False
     # Deferred import: keeps the logic package importable without pulling Qt widgets at module load.
     from KonfAILib.widgets.helpers import ask_user_to_install_dependency, slicer_wait_popup
+
+    installed = get_installed_version("konfai-apps")
+    core = get_installed_version("konfai")
+    if any(version is None or Version(version) < Version(KONFAI_APPS_REQUIRED) for version in (installed, core)):
+        if not ask_user_to_install_dependency(
+            "KonfAI",
+            f"KonfAI needs konfai-apps {KONFAI_APPS_REQUIRED} or newer (installed: {installed or 'none'}), which no "
+            "release ships yet.\n\nInstall konfai and konfai-apps from KonfAI's main branch now (git is needed)?",
+        ):
+            slicer.util.selectModule("Data")
+            return False
+        with slicer_wait_popup("KonfAI dependency install", "Installing konfai and konfai-apps from KonfAI's main..."):
+            slicer.util.pip_install(KONFAI_MAIN)
+    elif not install_package("konfai-apps", "KonfAI"):
+        return False
 
     import konfai
 
     try:
         konfai.assert_konfai_install()
     except Exception as e:
-        latest = get_latest_pypi_version("konfai-apps")
         if not ask_user_to_install_dependency(
             "KonfAI",
             "KonfAI-apps is installed but not functional (missing/broken dependencies).\n\n"
@@ -150,7 +172,7 @@ def install_konfai() -> bool:
             slicer.util.selectModule("Data")
             return False
         with slicer_wait_popup("KonfAI-apps repair", "Reinstalling KonfAI-apps and dependencies..."):
-            slicer.util.pip_install(f"--upgrade --force-reinstall --no-deps konfai-apps=={latest}")
+            slicer.util.pip_install(["--upgrade", "--force-reinstall", "--no-deps", *KONFAI_MAIN])
             slicer.util.pip_install(
                 "tqdm numpy ruamel.yaml psutil tensorboard lxml h5py nvidia-ml-py requests huggingface_hub"
             )

@@ -17,6 +17,7 @@
 """App selection panel: app list population (Hugging Face, remote server,
 local folders), app management actions and description display."""
 
+import html
 import json
 import os
 import re
@@ -104,6 +105,7 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         self.ui.descriptionCard.toolTip = _("Click to expand or collapse the description.")
 
         self.ui.appComboBox.currentIndexChanged.connect(self.on_app_selected)
+        self.ui.presetComboBox.currentIndexChanged.connect(self.on_preset_selected)
 
         self.app_local_repositoy: list[str] = []
 
@@ -287,8 +289,36 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         self._description_expanded = False
         self.on_toggle_description()
 
+        # The same app again (the module entered anew, its files refreshed after a run): what the user chose for it
+        # (preset, Advanced) stays; another app starts from its own defaults.
+        kept = self.template.inference_panel.state() if self.get_parameter("App") == app.get_name() else None
         self.set_parameter("App", app.get_name())
         self.template.dispatch_app_changed(app)
+        self.refresh_presets(app)
+        if kept is not None:
+            self.template.inference_panel.restore(kept)
+
+    def refresh_presets(self, app, select: str | None = None) -> None:
+        """List the app's presets under the app selector, ``select`` chosen (else its base config); the row only
+        shows for an app that has presets."""
+        presets = app.get_presets()
+        combo = self.ui.presetComboBox
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(_("Base config"), None)
+        for name, preset in presets.items():
+            combo.addItem(name, name)
+            combo.setItemData(combo.count - 1, preset.description, Qt.ToolTipRole)
+        combo.setCurrentIndex(max(combo.findData(select), 0) if select else 0)
+        combo.blockSignals(False)
+        self.ui.label_preset.setVisible(bool(presets))
+        combo.setVisible(bool(presets))
+        self._show_description()
+
+    def on_preset_selected(self, index: int) -> None:
+        """Run the app with the chosen preset: the inference panel starts its parameters from it."""
+        self.template.inference_panel.set_preset(self.ui.presetComboBox.itemData(index))
+        self._show_description()
 
     def _refresh_selected_app_metadata(self):
         """
@@ -324,12 +354,26 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         if not app:
             return
 
-        if self._description_expanded:
-            self.ui.appDescriptionLabel.setText(app.get_description())
-        else:
-            self.ui.appDescriptionLabel.setText(app.get_short_description())
-
+        self.ui.appDescriptionLabel.setText(self._description(full=self._description_expanded))
         self._description_expanded = not self._description_expanded
+
+    def _description(self, full: bool) -> str:
+        """The app's description, short or full, then the chosen preset's: what the run will do."""
+        app = self.ui.appComboBox.currentData
+        text = app.get_description() if full else app.get_short_description()
+        preset = self.ui.presetComboBox.currentData
+        presets = app.get_presets()
+        if preset not in presets:
+            return text
+        # One rich text: a plain description keeps its line breaks, an HTML one (links) is kept as it is.
+        body = text if "<" in text else html.escape(text).replace("\n", "<br>")
+        preset_text = html.escape(presets[preset].description or "")
+        return f"{body}<br><br><b>Preset {html.escape(preset)}</b>" + (f": {preset_text}" if preset_text else "")
+
+    def _show_description(self) -> None:
+        """Redraw the description as it is shown now, short or full (the toggle holds the next state)."""
+        if self.ui.appComboBox.currentData is not None:
+            self.ui.appDescriptionLabel.setText(self._description(full=not self._description_expanded))
 
     def on_remove_app(self) -> None:
         """
