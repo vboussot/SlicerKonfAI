@@ -665,8 +665,9 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             *(chosen.overrides if chosen else ()),
             *(f"{key}={self._format_config_value(value)}" for key, value in edits.items()),
         ]
+        tiles = getattr(chosen, "tiles", True)  # the chosen preset's tiling policy goes with its --set
         try:
-            written = app.save_preset(name.strip(), description.strip(), overrides)
+            written = app.save_preset(name.strip(), description.strip(), overrides, tiles=tiles)
         except Exception as exc:  # noqa: BLE001 - surface a refused name or override to the user
             qt.QMessageBox.critical(None, "Save as preset", f"Could not save the preset:\n{exc}")
             return False
