@@ -289,9 +289,14 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         self._description_expanded = False
         self.on_toggle_description()
 
+        # The same app again (the module entered anew, its files refreshed after a run): what the user chose for it
+        # (preset, ensemble, Advanced) stays; another app starts from its own defaults.
+        kept = self.template.inference_panel.state() if self.get_parameter("App") == app.get_name() else None
         self.set_parameter("App", app.get_name())
         self.template.dispatch_app_changed(app)
         self.refresh_presets(app)
+        if kept is not None:
+            self.template.inference_panel.restore(kept)
 
     def refresh_presets(self, app, select: str | None = None) -> None:
         """List the app's presets under the app selector, ``select`` chosen (else its base config); the row only
@@ -338,10 +343,7 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         was_blocked = self.ui.appComboBox.blockSignals(True)
         self.ui.appComboBox.setItemData(index, refreshed_app)
         self.ui.appComboBox.blockSignals(was_blocked)
-        # The same app, its files refreshed: what the user chose for it (preset, ensemble, Advanced) stays.
-        kept = self.template.inference_panel.state()
         self.on_app_selected()
-        self.template.inference_panel.restore(kept)
         return refreshed_app
 
     def on_toggle_description(self) -> None:
