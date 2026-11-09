@@ -306,10 +306,12 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             "Drop every override (patch, batch and model parameters) and reopen on the app's defaults."
         )
         footer.addWidget(reset_button)
+        saved: list[bool] = []  # a preset saved from the dialog holds its edits: they are no override of it
         if values and hasattr(app, "save_preset"):
 
             def _on_save():
-                self._save_as_preset(app, param_widgets, dialog)
+                if self._save_as_preset(app, param_widgets, dialog):
+                    saved.append(True)
 
             save_button = qt.QPushButton("Save as preset…")
             save_button.setToolTip("Keep the current parameters as a preset of this app: a name for their --set.")
@@ -352,7 +354,8 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             self._patch_override = [spin.value for spin in spins]
             self._batch_override = batch_spin.value
         # Model-parameter overrides apply regardless of the patch/batch 'auto' toggle.
-        self._param_override = self._collect_param_overrides(param_widgets)
+        if not saved:
+            self._param_override = self._collect_param_overrides(param_widgets)
         self._refresh_advanced_button()
 
     def _advanced_gear_icon(self, modified: bool):
@@ -672,7 +675,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             args += ["--set", f"{name}={self._format_config_value(value)}"]
         return args
 
-    def _save_as_preset(self, app, param_widgets, dialog) -> None:
+    def _save_as_preset(self, app, param_widgets, dialog) -> bool:
         """Keep the current parameters as a preset of the app: the chosen preset's --set, then the edits.
 
         konfai-apps writes it where the user may: their presets file for an app of the Hugging Face cache, the app's
@@ -682,7 +685,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
 
         name = qt.QInputDialog.getText(None, "Save as preset", "Preset name (letters, digits, '_' and '-'):")
         if not name or not name.strip():
-            return
+            return False
         description = qt.QInputDialog.getText(None, "Save as preset", "What it is for:") or ""
         chosen = app.get_presets().get(self._preset)
         edits = self._collect_param_overrides(param_widgets)
@@ -694,13 +697,14 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             written = app.save_preset(name.strip(), description.strip(), overrides)
         except Exception as exc:  # noqa: BLE001 - surface a refused name or override to the user
             qt.QMessageBox.critical(None, "Save as preset", f"Could not save the preset:\n{exc}")
-            return
+            return False
         self._preset, self._param_override = name.strip(), {}
         self._refresh_advanced_button()
         self.template.selection_panel.refresh_presets(app, select=self._preset)
         self._seed_references(app)
         self._update_logs(f"[KonfAI] Saved preset '{name.strip()}' of {app.get_name()} in {written}.")
         dialog.accept()
+        return True
 
     def set_preset(self, preset: str | None) -> None:
         """Run the app with ``preset`` (None: its base config), chosen under the app selector. Tuned parameters were
