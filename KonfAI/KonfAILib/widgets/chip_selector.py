@@ -52,6 +52,8 @@ class ChipSelector:
         self._min_selected = max(0, int(min_selected))
         self._on_change = on_change
         self._combo_remove = combo_remove
+        #: A chip that stays: it carries no ✕ and a click leaves it.
+        self.locked: str | None = None
         self._combo.connect("activated(int)", self._on_combo_activated)
         if self._spinbox is not None:
             self._spinbox.setMinimum(self._min_selected)
@@ -106,10 +108,11 @@ class ChipSelector:
             return
 
         # The visible label carries a ✕ affordance; the identity stays in the 'chipName' property.
-        btn = QPushButton(f"{text}  ✕")
+        locked = text == self.locked
+        btn = QPushButton(text if locked else f"{text}  ✕")
         btn.setProperty("chipName", text)
         btn.flat = True
-        btn.toolTip = f"Click to remove {text}"
+        btn.toolTip = text if locked else f"Click to remove {text}"
         btn.minimumHeight = 20
         btn.maximumHeight = 24
 
@@ -139,7 +142,8 @@ class ChipSelector:
         def _remove():
             self._remove(text)
 
-        btn.clicked.connect(_remove)
+        if not locked:
+            btn.clicked.connect(_remove)
         self._layout.insertWidget(self._insert_index_before_spacer(), btn)
 
         if self._combo_remove:

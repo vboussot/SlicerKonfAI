@@ -290,7 +290,7 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         self.on_toggle_description()
 
         # The same app again (the module entered anew, its files refreshed after a run): what the user chose for it
-        # (preset, Advanced) stays; another app starts from its own defaults.
+        # (preset, ensemble, Advanced) stays; another app starts from its own defaults.
         kept = self.template.inference_panel.state() if self.get_parameter("App") == app.get_name() else None
         self.set_parameter("App", app.get_name())
         self.template.dispatch_app_changed(app)
