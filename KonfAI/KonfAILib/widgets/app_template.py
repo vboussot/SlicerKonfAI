@@ -449,9 +449,9 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                 break
         if current_app is None:
             current_app = self.ui.appComboBox.itemData(0)
-        # Ensemble / TTA / MC-dropout defaults based on app capabilities
+        # Ensemble / TTA / MC-dropout defaults: TTA starts off, each pass costs a full inference
         if not self.get_parameter("number_of_tta"):
-            self.set_parameter("number_of_tta", str(current_app.get_maximum_tta()) if current_app else "0")
+            self.set_parameter("number_of_tta", "0")
         if not self.get_parameter("uncertainty"):
             self.set_parameter("uncertainty", "False")
         if not self.get_parameter("number_of_mc_dropout"):

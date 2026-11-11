@@ -730,8 +730,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         if checkpoints_name_param and isinstance(checkpoints_name_param, str):
             checkpoints_name = checkpoints_name_param.split(",")
         self.chip_selector.update(app.get_checkpoints_name_available(), app.get_checkpoints_name(), checkpoints_name)
-        if not self.get_parameter("number_of_tta") or int(self.get_parameter("number_of_tta")) > app.get_maximum_tta():
-            self.set_parameter("number_of_tta", str(app.get_maximum_tta()))
+        self.set_parameter("number_of_tta", min(int(self.get_parameter("number_of_tta") or 0), app.get_maximum_tta()))
 
         if (
             not self.get_parameter("number_of_mc_dropout")
