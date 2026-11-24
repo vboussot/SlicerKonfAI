@@ -156,6 +156,7 @@ class KonfAIWidget(ScriptedLoadableModuleWidget):
                 "VBoussot/MRSegmentator-KonfAI",
                 "VBoussot/TotalSegmentator-KonfAI",
                 "VBoussot/ImpactSeg",
+                "HCedric/IMPACTSeg",
                 "VBoussot/DentalSegmentator-KonfAI",
             ],
         )
