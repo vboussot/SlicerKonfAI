@@ -30,6 +30,7 @@ from slicer.i18n import tr as _
 from KonfAILib.logic.servers import RemoteServer
 from KonfAILib.widgets import helpers, io_selectors
 from KonfAILib.widgets.chip_selector import ChipSelector
+from KonfAILib.widgets.interactive import InteractiveSegmentation
 from KonfAILib.widgets.panels.base import KonfAIAppPanel
 
 if TYPE_CHECKING:
@@ -96,6 +97,11 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             1,
             on_change=self.on_checkpoint_selected_change,
         )
+
+        # A prompted app segments from clicks placed in the views, a prediction after each, in place of Run.
+        self.interactive = InteractiveSegmentation(self)
+        self.interactive.setVisible(False)
+        self.layout().addWidget(self.interactive)
 
     def _update_uncertainty_visibility(self) -> None:
         """Show the Uncertainty checkbox only when there is a spread to measure: several
@@ -712,6 +718,14 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         self._update_uncertainty_visibility()
 
         self._rebuild_io_selectors(app)
+
+        # Its prompts and last mask are the interactive mode's own, made from the clicks and the segment.
+        prompted = self.interactive.set_app(app)
+        self.ui.extraInputsForm.setVisible(not prompted)
+        self.ui.runInferenceButton.setVisible(not prompted)
+
+    def cleanup(self) -> None:
+        self.interactive.shutdown()
 
     def _rebuild_io_selectors(self, app) -> None:
         """
