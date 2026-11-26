@@ -66,6 +66,7 @@ class InspectTab(qt.QWidget):
         self.setObjectName("inspectTab")
         self._roi_id: str | None = None
         self._boxes: list[dict | None] = []
+        self._report_path: Path | None = None
         self.form = qt.QFormLayout(self)
 
         self.task = qt.QComboBox()
@@ -105,17 +106,32 @@ class InspectTab(qt.QWidget):
 
         self.verdict = qt.QLabel("")
         self.verdict.setWordWrap(True)
+        self.verdict.setTextFormat(qt.Qt.PlainText)
         self.form.addRow(self.verdict)
-        self.findings = qt.QTableWidget(0, 3)
-        self.findings.setHorizontalHeaderLabels(["Severity", "Defect", "What the inspector saw"])
-        self.findings.horizontalHeader().setStretchLastSection(True)
+        self.report_button = qt.QPushButton("Full report…")
+        self.report_button.clicked.connect(self._open_report)
+        self.report_button.hide()
+        self.form.addRow(self.report_button)
+        self.findings = qt.QTableWidget(0, 2)
+        self.findings.setHorizontalHeaderLabels(["Severity", "Finding"])
+        header = self.findings.horizontalHeader()
+        header.setSectionResizeMode(0, qt.QHeaderView.ResizeToContents)
+        header.setStretchLastSection(True)
+        header.sectionResized.connect(lambda *_: self.findings.resizeRowsToContents())
+        self.findings.setWordWrap(True)
+        self.findings.setTextElideMode(qt.Qt.ElideNone)
         self.findings.verticalHeader().setVisible(False)
         self.findings.setSelectionBehavior(qt.QAbstractItemView.SelectRows)
         self.findings.setSelectionMode(qt.QAbstractItemView.SingleSelection)
         self.findings.setEditTriggers(qt.QAbstractItemView.NoEditTriggers)
-        self.findings.setToolTip("Click a finding: the slice views go to it")
-        self.findings.currentCellChanged.connect(lambda row, *_: self._go_to(row))
+        self.findings.setToolTip("Select a finding to read its description and locate it in the slice views")
+        self.findings.currentCellChanged.connect(lambda row, *_: self._show_finding(row))
         self.form.addRow(self.findings)
+        self.detail = qt.QLabel("")
+        self.detail.setWordWrap(True)
+        self.detail.setTextFormat(qt.Qt.PlainText)
+        self.detail.setTextInteractionFlags(qt.Qt.TextSelectableByMouse)
+        self.form.addRow(self.detail)
         self._on_task_changed()
 
     def _selector(self, key: str, node_types: list[str]):
@@ -221,7 +237,7 @@ class InspectTab(qt.QWidget):
             report = work / "Inspect" / "report.json"
             if not report.is_file():
                 return self._stop("Scout did not produce a report. See the module log for details.")
-            self._show(json.loads(report.read_text()))
+            self._show(json.loads(report.read_text()), report.with_suffix(".md"))
 
         self.verdict.setText(f"Inspecting with {name}…")
         self.panel.process.run(sys.executable, work, args, on_end, environment=environment)
@@ -246,9 +262,12 @@ class InspectTab(qt.QWidget):
         self.panel._update_logs(message, False)
         self.panel.set_running(False)
 
-    def _show(self, report: dict | None) -> None:
+    def _show(self, report: dict | None, report_path: Path | None = None) -> None:
         """The verdict and one row a finding; ``None`` empties the tab."""
         self.findings.setRowCount(0)
+        self.detail.clear()
+        self._report_path = report_path
+        self.report_button.setVisible(report_path is not None and report_path.is_file())
         self._boxes = []
         if self._roi_id and (roi := slicer.mrmlScene.GetNodeByID(self._roi_id)):  # the last report's box goes with it
             slicer.mrmlScene.RemoveNode(roi)
@@ -259,9 +278,8 @@ class InspectTab(qt.QWidget):
         if report.get("error"):
             self.verdict.setText(f"The inspection stopped: {report['error']}")
         elif conclusion := report.get("conclusion"):
-            self.verdict.setText(
-                f"<b>{conclusion['verdict'].replace('_', ' ').capitalize()}.</b> {conclusion['summary']}"
-            )
+            verdict = conclusion["verdict"].replace("_", " ").capitalize()
+            self.verdict.setText(f"{verdict}. {conclusion['summary']}")
         for observation in report.get("observations", []):
             row = self.findings.rowCount
             self.findings.insertRow(row)
@@ -269,15 +287,40 @@ class InspectTab(qt.QWidget):
             cells = (
                 observation["severity"] if kind != "measured_property" else "measure",
                 observation["defect"].replace("_", " ") + (" (suspected)" if kind == "suspected_error" else ""),
-                observation["description"],
             )
             for column, text in enumerate(cells):
                 item = qt.QTableWidgetItem(text)
-                item.setToolTip(observation["description"])
+                item.setData(qt.Qt.UserRole, observation["description"])
                 self.findings.setItem(row, column, item)
             self._boxes.append(observation.get("box_mm"))
-        self.findings.resizeColumnToContents(0)
-        self.findings.resizeColumnToContents(1)
+        self.findings.resizeRowsToContents()
+
+    def _open_report(self) -> None:
+        path = self._report_path
+        if path is None:
+            return
+        try:
+            markdown = path.read_text(encoding="utf-8")
+        except OSError:
+            qt.QMessageBox.information(self, "Scout report", "This inspection's report file is no longer available.")
+            return
+
+        dialog = qt.QDialog(self)
+        dialog.setWindowTitle("Scout report")
+        dialog.resize(820, 650)
+        browser = qt.QTextBrowser(dialog)
+        browser.setOpenLinks(False)
+        browser.document.setBaseUrl(qt.QUrl.fromLocalFile(str(path)))
+        browser.document.setMarkdown(markdown, qt.QTextDocument.MarkdownDialectGitHub | qt.QTextDocument.MarkdownNoHTML)
+        layout = qt.QVBoxLayout(dialog)
+        layout.addWidget(browser)
+        dialog.exec_()
+
+    def _show_finding(self, row: int) -> None:
+        item = self.findings.item(row, 1) if row >= 0 else None
+        self.detail.setText(item.data(qt.Qt.UserRole) if item is not None else "")
+        if item is not None:
+            self._go_to(row)
 
     def _go_to(self, row: int) -> None:
         """The slice views on the finding, its box drawn. Scout speaks LPS millimetres, the scene RAS."""
