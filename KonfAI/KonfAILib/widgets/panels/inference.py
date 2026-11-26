@@ -879,6 +879,8 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
                 self.ui.uncertaintyCheckBox,
                 self.ui.label_selected_checkpoints,
                 self.ui.selectedCheckpointsWidget,
+                self._references_label,
+                self._references_widget,
             ):
                 widget.setVisible(False)
 
