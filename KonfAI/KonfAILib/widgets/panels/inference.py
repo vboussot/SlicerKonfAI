@@ -25,12 +25,12 @@ import numpy as np
 import SimpleITK as sitk  # noqa: N813
 import sitkUtils
 import slicer
-from slicer.i18n import tr as _
-
 from KonfAILib.logic.servers import RemoteServer
 from KonfAILib.widgets import helpers, io_selectors
 from KonfAILib.widgets.chip_selector import ChipSelector
+from KonfAILib.widgets.interactive import InteractiveSegmentation
 from KonfAILib.widgets.panels.base import KonfAIAppPanel
+from slicer.i18n import tr as _
 
 if TYPE_CHECKING:
     from KonfAILib.widgets.app_template import KonfAIAppTemplateWidget
@@ -64,9 +64,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         # setSegmentationNode() rejects non-segmentation nodes; the output selector also holds scalar
         # volumes (registration / synthesis outputs), so route through a type guard instead of connecting
         # setSegmentationNode directly (which would raise TypeError on a scalar-volume output).
-        self.ui.outputVolumeSelector.connect(
-            "currentNodeChanged(vtkMRMLNode*)", self._sync_segmentation_show3d
-        )
+        self.ui.outputVolumeSelector.connect("currentNodeChanged(vtkMRMLNode*)", self._sync_segmentation_show3d)
         self.ui.segmentationShow3DButton.setVisible(False)
 
         self.ui.ttaSpinBox.valueChanged.connect(self.on_tta_changed)
@@ -97,13 +95,16 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             on_change=self.on_checkpoint_selected_change,
         )
 
+        # A prompted app segments from clicks placed in the views, a prediction after each, in place of Run.
+        self.interactive = InteractiveSegmentation(self)
+        self.interactive.setVisible(False)
+        self.layout().addWidget(self.interactive)
+
     def _update_uncertainty_visibility(self) -> None:
         """Show the Uncertainty checkbox only when there is a spread to measure: several
         checkpoints/presets selected, or TTA / MC-dropout passes, on an app that supports it."""
         multi_sample = (
-            len(self.chip_selector.selected()) > 1
-            or self.ui.ttaSpinBox.value > 0
-            or self.ui.mcDropoutSpinBox.value > 0
+            len(self.chip_selector.selected()) > 1 or self.ui.ttaSpinBox.value > 0 or self.ui.mcDropoutSpinBox.value > 0
         )
         visible = multi_sample and self._has_uncertainty
         self.ui.uncertaintyCheckBox.setVisible(visible)
@@ -272,7 +273,9 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         # is style-dependent (Fusion inserts ActionRole between OK and Cancel).
         footer = qt.QHBoxLayout()
         reset_button = qt.QPushButton("Restore defaults")
-        reset_button.setToolTip("Drop every override (patch, batch and model parameters) and reopen on the app's defaults.")
+        reset_button.setToolTip(
+            "Drop every override (patch, batch and model parameters) and reopen on the app's defaults."
+        )
         footer.addWidget(reset_button)
         if values:
 
@@ -712,6 +715,29 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         self._update_uncertainty_visibility()
 
         self._rebuild_io_selectors(app)
+
+        # Its prompts and last mask are the interactive mode's own, made from the clicks and the segment.
+        prompted = self.interactive.set_app(app)
+        self.ui.extraInputsForm.setVisible(not prompted)
+        self.ui.runInferenceButton.setVisible(not prompted)
+        if prompted:  # a session runs the app as published: no checkpoint, TTA or MC-dropout choice
+            for widget in (
+                self.ui.label_stochastic,
+                self.ui.label_ensemble,
+                self.ui.checkpointsComboBox,
+                self.ui.ensembleSpinBox,
+                self.ui.label_tta,
+                self.ui.ttaSpinBox,
+                self.ui.label_mcdo,
+                self.ui.mcDropoutSpinBox,
+                self.ui.uncertaintyCheckBox,
+                self.ui.label_selected_checkpoints,
+                self.ui.selectedCheckpointsWidget,
+            ):
+                widget.setVisible(False)
+
+    def cleanup(self) -> None:
+        self.interactive.shutdown()
 
     def _rebuild_io_selectors(self, app) -> None:
         """

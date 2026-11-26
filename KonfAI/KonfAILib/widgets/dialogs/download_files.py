@@ -56,7 +56,7 @@ class DownloadFilesDialog(QDialog):
         for f in files:
             item = QListWidgetItem(f)
 
-            if Path(f).suffix == ".pt" and Path(f).name not in checkpoints_name_available:
+            if Path(f).suffix in (".pt", ".safetensors") and Path(f).name not in checkpoints_name_available:
                 item.setForeground(QColor("#9ca3af"))
                 font = item.font()
                 font.setItalic(True)
