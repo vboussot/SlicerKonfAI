@@ -31,6 +31,7 @@ from KonfAILib.logic.servers import RemoteServer
 from KonfAILib.widgets import io_selectors
 from KonfAILib.widgets.metrics_panel import KonfAIMetricsPanel
 from KonfAILib.widgets.panels.base import KonfAIAppPanel
+from KonfAILib.widgets.panels.inspect import InspectTab
 
 if TYPE_CHECKING:
     from KonfAILib.widgets.app_template import KonfAIAppTemplateWidget
@@ -98,6 +99,10 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
             "currentNodeChanged(vtkMRMLNode*)", self.template.update_parameter_node_from_gui
         )
 
+        # A third way to judge a result, beside a reference and an uncertainty: an inspector reads it
+        self.inspect = InspectTab(self)
+        self.ui.qaTabWidget.addTab(self.inspect, "Inspect")
+
         # Run button for QA
         self.ui.runEvaluationButton.clicked.connect(self.on_run_evaluation_button)
 
@@ -117,6 +122,7 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
         self.ui.qaTabWidget.setTabEnabled(1, has_uncertainty)
 
         self._rebuild_evaluation_tabs(app)
+        self.inspect.on_app_changed(app)
 
     def _rebuild_evaluation_tabs(self, app) -> None:
         """
@@ -275,6 +281,8 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
 
         Ensures that button enabling/disabling is consistent with the current tab.
         """
+        if self.ui.qaTabWidget.currentWidget().name == "inspectTab":
+            self.inspect.prefill()
         self.template.update_gui_from_parameter_node()
 
     def on_run_evaluation_button(self) -> None:
@@ -285,6 +293,8 @@ class KonfAIAppQAPanel(KonfAIAppPanel):
         self.uncertainty_panel.clear_images_list()
         if self.ui.qaTabWidget.currentWidget().name == "withRefTab":
             self.on_run_button(self.evaluation)
+        elif self.ui.qaTabWidget.currentWidget().name == "inspectTab":
+            self.on_run_button(self.inspect.run)
         else:
             self.on_run_button(self.uncertainty)
 

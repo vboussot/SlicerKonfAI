@@ -541,6 +541,11 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
             else:
                 self.ui.runEvaluationButton.toolTip = _("Select input and reference volumes")
                 self.ui.runEvaluationButton.enabled = False
+        elif self.ui.qaTabWidget.currentWidget().name == "inspectTab":
+            self.ui.runEvaluationButton.enabled = self.qa_panel.inspect.inputs_ok()
+            self.ui.runEvaluationButton.toolTip = _("Inspect the result") if self.qa_panel.inspect.inputs_ok() else _(
+                "Select the image and the result"
+            )
         else:
             # Uncertainty estimation: need a stack volume with more than one component
             if inference_stack_volume and inference_stack_volume.GetNumberOfDataNodes() > 1:
