@@ -17,7 +17,6 @@
 """App selection panel: app list population (Hugging Face, remote server,
 local folders), app management actions and description display."""
 
-import html
 import json
 import os
 import re
@@ -105,7 +104,10 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         self.ui.descriptionCard.toolTip = _("Click to expand or collapse the description.")
 
         self.ui.appComboBox.currentIndexChanged.connect(self.on_app_selected)
-        self.ui.presetComboBox.currentIndexChanged.connect(self.on_preset_selected)
+        self._preset_menu = QMenu(self.ui.presetMenuButton)
+        self._preset_menu.setToolTipsVisible(True)
+        self._preset_menu.triggered.connect(self.on_preset_selected)
+        self.ui.presetMenuButton.setMenu(self._preset_menu)
 
         self.app_local_repositoy: list[str] = []
 
@@ -199,7 +201,9 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
                 cur: BaseException | None = exc
                 while cur is not None and id(cur) not in seen:
                     seen.add(id(cur))
-                    if type(cur).__name__ in ("EntryNotFoundError", "RepositoryNotFoundError", "RevisionNotFoundError"):
+                    if type(cur).__name__ in ("RepositoryNotFoundError", "GatedRepoError"):
+                        return False  # The Hub also gives this response for inaccessible private repositories.
+                    if type(cur).__name__ in ("EntryNotFoundError", "RevisionNotFoundError"):
                         return True
                     if getattr(getattr(cur, "response", None), "status_code", None) == 404:
                         return True
@@ -262,6 +266,7 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         """
         app = self.ui.appComboBox.currentData
         if app is None:
+            self.ui.presetChoice.hide()
             return
 
         # Removing app from disk is only relevant for custom (local) apps;
@@ -299,26 +304,49 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
             self.template.inference_panel.restore(kept)
 
     def refresh_presets(self, app, select: str | None = None) -> None:
-        """List the app's presets under the app selector, ``select`` chosen (else its base config); the row only
-        shows for an app that has presets."""
+        """Show the selected preset and populate the menu with the app's runnable alternatives."""
+        menu = self._preset_menu
+        menu.clear()
         presets = app.get_presets()
-        combo = self.ui.presetComboBox
-        combo.blockSignals(True)
-        combo.clear()
-        combo.addItem(_("Base config"), None)
-        for name, preset in presets.items():
-            combo.addItem(name, name)
-            combo.setItemData(combo.count - 1, preset.description, Qt.ToolTipRole)
-        combo.setCurrentIndex(max(combo.findData(select), 0) if select else 0)
-        combo.blockSignals(False)
-        self.ui.label_preset.setVisible(bool(presets))
-        combo.setVisible(bool(presets))
-        self._show_description()
+        # Interactive sessions use the published app as-is.
+        visible = bool(presets) and self.template.inference_panel.interactive.isHidden()
+        self.ui.presetChoice.setVisible(visible)
+        if not visible:
+            return
 
-    def on_preset_selected(self, index: int) -> None:
-        """Run the app with the chosen preset: the inference panel starts its parameters from it."""
-        self.template.inference_panel.set_preset(self.ui.presetComboBox.itemData(index))
-        self._show_description()
+        if select not in presets:
+            select = None
+        default = next((preset for preset in presets.values() if not preset.overrides and preset.tiles), None)
+        base_label = _("App defaults")
+        base_description = _("Use the settings shipped with this app.")
+        if default is not None:
+            base_label = _("{preset} (default)").format(preset=default.name.replace("_", " "))
+            base_description = default.description or base_description
+        if default is not None and select == default.name:
+            select = None
+        for name, preset in [(None, None), *presets.items()]:
+            if preset is not None and preset == default:
+                continue
+            label = name.replace("_", " ") if name is not None else base_label
+            action = menu.addAction(label.replace("&", "&&"))
+            action.setData(name)
+            action.setCheckable(True)
+            action.setChecked(name == select)
+            action.setToolTip((preset.description or "") if preset is not None else base_description)
+        self.ui.activePresetLabel.setText(select.replace("_", " ") if select else base_label)
+        description = presets[select].description if select else base_description
+        self.ui.presetDescriptionLabel.setText(description or "")
+        self.ui.presetDescriptionLabel.setVisible(bool(description))
+
+    def on_preset_selected(self, action) -> None:
+        """Apply a preset and display the active choice, including after a rejected selection."""
+        app = self.ui.appComboBox.currentData
+        active = app.get_preset()
+        name = action.data()
+        if name != (active.name if active else None):
+            self.template.inference_panel.set_preset(name)
+        active = app.get_preset()
+        self.refresh_presets(app, select=active.name if active else None)
 
     def _refresh_selected_app_metadata(self):
         """
@@ -354,26 +382,9 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         if not app:
             return
 
-        self.ui.appDescriptionLabel.setText(self._description(full=self._description_expanded))
+        description = app.get_description() if self._description_expanded else app.get_short_description()
+        self.ui.appDescriptionLabel.setText(description)
         self._description_expanded = not self._description_expanded
-
-    def _description(self, full: bool) -> str:
-        """The app's description, short or full, then the chosen preset's: what the run will do."""
-        app = self.ui.appComboBox.currentData
-        text = app.get_description() if full else app.get_short_description()
-        preset = self.ui.presetComboBox.currentData
-        presets = app.get_presets()
-        if preset not in presets:
-            return text
-        # One rich text: a plain description keeps its line breaks, an HTML one (links) is kept as it is.
-        body = text if "<" in text else html.escape(text).replace("\n", "<br>")
-        preset_text = html.escape(presets[preset].description or "")
-        return f"{body}<br><br><b>Preset {html.escape(preset)}</b>" + (f": {preset_text}" if preset_text else "")
-
-    def _show_description(self) -> None:
-        """Redraw the description as it is shown now, short or full (the toggle holds the next state)."""
-        if self.ui.appComboBox.currentData is not None:
-            self.ui.appDescriptionLabel.setText(self._description(full=not self._description_expanded))
 
     def on_remove_app(self) -> None:
         """
@@ -516,6 +527,7 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         m = QMenu()
         act_folder = m.addAction("Add from folder…")
         act_hf = m.addAction("Add from Hugging Face…")
+        act_token = m.addAction("Sign in to Hugging Face…")
         act_ft = m.addAction("Setup fine-tuning")
         can_setup_fine_tuning = self._has_root_training_config(self.ui.appComboBox.currentData)
         act_ft.setEnabled(can_setup_fine_tuning)
@@ -528,8 +540,37 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
             self.on_add_folder()
         elif chosen is act_hf:
             self.on_add_hf()
+        elif chosen is act_token:
+            if self.ask_hf_token(_("Paste a Hugging Face access token to connect Slicer.")):
+                self.on_refresh_app()
         elif chosen is act_ft:
             self.on_add_ft()
+
+    def ask_hf_token(self, message: str) -> bool:
+        """Save a validated token through Hugging Face's normal login store."""
+        from huggingface_hub import login
+
+        token = QInputDialog().getText(
+            self,
+            _("Sign in to Hugging Face"),
+            message + "\n\n" + _("Create a read token at huggingface.co/settings/tokens."),
+            QLineEdit.Password,
+        ).strip()
+        if not token:
+            return False
+        try:
+            login(token=token, add_to_git_credential=False)
+        except Exception:
+            QMessageBox.critical(
+                self,
+                _("Hugging Face"),
+                _("Could not validate or save the token. Check your connection and try a valid access token."),
+            )
+            return False
+        if os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+            # A token present in the environment takes precedence over the on-disk login.
+            os.environ["HF_TOKEN"] = token
+        return True
 
     def on_add_folder(self) -> None:
         """
@@ -618,61 +659,53 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
         return "Config.yml" in filenames
 
     def on_add_hf(self) -> None:
-        """
-        Add a app from a Hugging Face repository.
-
-        The user is prompted for a repo id (e.g., 'VBoussot/ImpactSynth') and then
-        a subdirectory (app name) is selected among the available directories.
-        """
+        """Add an app from the revision shown in the app picker."""
         from huggingface_hub import HfApi
-        from konfai_apps.app_repository import LocalAppRepositoryFromHF
+        from huggingface_hub.errors import RepositoryNotFoundError
+        from konfai_apps.app_repository import AppRepositoryError, LocalAppRepositoryFromHF
 
         text = QInputDialog().getText(
             self,
-            "Add from Hugging Face",
-            "Enter repo id (e.g. VBoussot/ImpactSynth):",
+            _("Add from Hugging Face"),
+            _("Repository ID, optionally followed by @revision. The default is main."),
             QLineEdit.Normal,
         )
-        repo_id = text.strip()
-        if not repo_id:
+        base_repo_id, _separator, revision = text.strip().partition("@")
+        if not base_repo_id:
             return
-
+        revision = revision or "main"
+        repo_id = f"{base_repo_id}@{revision}"
         api = HfApi()
-        base_repo_id, _, revision = repo_id.partition("@")
 
-        files = None
-        try:
-            with self._apps_loading_feedback(f"Checking {repo_id} on Hugging Face..."):
-                self._set_status_progress(20, f"Connecting to {repo_id}...")
-                files = api.list_repo_files(
-                    repo_id=base_repo_id,
-                    revision=revision or None,
-                    repo_type="model",
-                )
-                self._set_status_progress(100, f"Loaded repository tree for {repo_id}.")
-        except Exception:
-            QMessageBox.critical(None, "Hugging Face", f"Repository '{repo_id}' does not exist on Hugging Face.")
-            return
-
-        # List top-level directories as candidate app names
-        dirs = sorted({path.split("/")[0] for path in files if "/" in path})
-        app_name = self.ask_subdir(dirs)
-        if app_name:
-            from konfai_apps.app_repository import is_app_repo
-
-            app_files = [path.removeprefix(f"{app_name}/") for path in files if path.startswith(f"{app_name}/")]
-            state = is_app_repo(app_files)
-            if not state:
-                QMessageBox.critical(
-                    None,
-                    "App",
-                    f"The selected folder '{app_name}' does not contain a valid KonfAI app structure.",
-                )
+        for attempt in range(2):
+            try:
+                with self._apps_loading_feedback(f"Checking {repo_id} on Hugging Face..."):
+                    files = api.list_repo_files(repo_id=base_repo_id, revision=revision, repo_type="model")
+                break
+            except RepositoryNotFoundError:
+                if attempt == 0:
+                    if self.ask_hf_token(_("This repository could be private. Paste a token with access to it.")):
+                        continue
+                    return
+                QMessageBox.critical(self, _("Hugging Face"), _("Check the repository ID and the token's access."))
+                return
+            except Exception as exc:
+                QMessageBox.critical(self, _("Hugging Face"), f"Could not list {repo_id}.\n\n{exc}")
                 return
 
+        dirs = sorted({path.split("/")[0] for path in files if path.count("/") == 1 and path.endswith("/app.json")})
+        if not dirs:
+            QMessageBox.information(self, _("Hugging Face"), _("No KonfAI apps were found at this revision."))
+            return
+        app_name = self.ask_subdir(dirs)
+        if app_name:
             with self._apps_loading_feedback(f"Initializing {app_name}..."):
                 self._set_status_progress(60, f"Loading metadata for {app_name}...")
-                app = LocalAppRepositoryFromHF(repo_id, app_name, True)
+                try:
+                    app = LocalAppRepositoryFromHF(repo_id, app_name, True)
+                except AppRepositoryError as exc:
+                    slicer.util.errorDisplay(str(exc), detailedText=getattr(exc, "details", None) or "")
+                    return
                 self._set_status_progress(100, f"Loaded {app_name}.")
 
             # Do not add duplicate display names
@@ -688,6 +721,7 @@ class KonfAIAppSelectionPanel(KonfAIAppPanel):
             self.ui.appComboBox.addItem(app_task_icon(app), app.get_display_name(), app)
             self.ui.appComboBox.setCurrentIndex(self.ui.appComboBox.findData(app))
             self.app_local_repositoy.append(app.get_name())
+            QSettings().setValue(f"KonfAI-Settings/{self._name}/Apps", json.dumps(self.app_local_repositoy))
 
     def on_add_ft(self) -> None:
         """

@@ -31,11 +31,12 @@ from KonfAILib.logic.mrml import has_node_content
 if TYPE_CHECKING:
     from KonfAILib.widgets.panels.qa import KonfAIAppQAPanel
 
-#: Who reads the result: the name shown, Scout's provider, whether the images leave the machine.
+#: Who reads the result: the name shown, Scout's provider, who receives the images when the inspector runs in the cloud.
 INSPECTORS = (
-    ("Heuristic (no model)", "mock", False),
-    ("Local server", "openai", False),
-    ("Claude (your Claude Code login)", "claude-code", True),
+    ("Heuristic (no model)", "mock", None),
+    ("Local server", "openai", None),
+    ("Claude (your Claude Code login)", "claude-code", "Anthropic"),
+    ("ChatGPT (Codex login)", "codex", "OpenAI"),
 )
 SCALAR = ["vtkMRMLScalarVolumeNode"]
 LABELS = ["vtkMRMLSegmentationNode", "vtkMRMLLabelMapVolumeNode"]
@@ -78,7 +79,7 @@ class InspectTab(qt.QWidget):
 
         settings = qt.QSettings()
         self.inspector = qt.QComboBox()
-        for name, _provider, _cloud in INSPECTORS:
+        for name, _provider, _destination in INSPECTORS:
             self.inspector.addItem(name)
         self.inspector.setCurrentIndex(min(int(settings.value(SETTINGS + "Inspector", 0)), len(INSPECTORS) - 1))
         self.url = qt.QLineEdit(settings.value(SETTINGS + "Url", "http://localhost:8000/v1"))
@@ -162,12 +163,15 @@ class InspectTab(qt.QWidget):
 
     def run(self, remote_server, devices: list[str]) -> None:
         """Export the case, run ``konfai-scout inspect`` on it, show its report."""
-        name, provider, cloud = INSPECTORS[self.inspector.currentIndex]
+        name, provider, destination = INSPECTORS[self.inspector.currentIndex]
         command = shutil.which("konfai-scout")
         if command is None:
-            return self._stop("[KonfAI] konfai-scout is not installed in Slicer's Python (pip install konfai-scout).")
-        if cloud and not slicer.util.confirmOkCancelDisplay(
-            "The images of this case will be sent to Anthropic's servers to be inspected.\n\n"
+            package = "konfai-scout[codex]" if provider == "codex" else "konfai-scout"
+            return self._stop(f"[KonfAI] Install {package} in Slicer's Python to inspect this result.")
+        if provider == "codex" and shutil.which("codex") is None:
+            return self._stop("[KonfAI] Install the Codex CLI, make it available on Slicer's PATH and run codex login.")
+        if destination and not slicer.util.confirmOkCancelDisplay(
+            f"Scout will send views of this case to {destination} for inspection.\n\n"
             "Do not continue with data you are not allowed to share.",
             windowTitle="Images leave this machine",
         ):
@@ -199,7 +203,7 @@ class InspectTab(qt.QWidget):
             # ponytail: a 32k window assumed (the trained model on a 24 GB card); the app should declare its own
             args += ["--base-url", self.url.text, "--local-provider", "--max-context-tokens", "26000"]
             args += ["--model", self.model.text] if self.model.text else []
-        if cloud:
+        if destination:
             args.append("--allow-cloud-images")
         self.panel._update_logs(f"[KonfAI] Inspection of a {task} by: {name}.", False)
 

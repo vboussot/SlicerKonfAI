@@ -180,30 +180,40 @@
                 </item>
             </layout>
         </item>
-        <!-- Preset: shown when the app has presets -->
         <item>
-            <layout class="QHBoxLayout" name="hLayout_preset">
-                <item>
-                    <widget class="QLabel" name="label_preset">
-                        <property name="text">
-                        <string>Preset:</string>
-                        </property>
-                    </widget>
-                </item>
-                <item>
-                    <widget class="QComboBox" name="presetComboBox">
-                        <property name="toolTip">
-                        <string>Run the app with one of its presets: a named set of parameters. The Advanced dialog starts from it.</string>
-                        </property>
-                        <property name="sizePolicy">
-                        <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
-                            <horstretch>1</horstretch>
-                            <verstretch>0</verstretch>
-                        </sizepolicy>
-                        </property>
-                    </widget>
-                </item>
-            </layout>
+            <widget class="QWidget" name="presetChoice">
+                <property name="visible">
+                    <bool>false</bool>
+                </property>
+                <layout class="QVBoxLayout" name="presetChoiceLayout">
+                    <property name="leftMargin"><number>0</number></property>
+                    <property name="topMargin"><number>0</number></property>
+                    <property name="rightMargin"><number>0</number></property>
+                    <property name="bottomMargin"><number>0</number></property>
+                    <item>
+                        <layout class="QHBoxLayout" name="presetTitleLayout">
+                            <item>
+                                <widget class="QLabel" name="activePresetLabel">
+                                    <property name="textFormat"><enum>Qt::PlainText</enum></property>
+                                    <property name="wordWrap"><bool>true</bool></property>
+                                </widget>
+                            </item>
+                            <item>
+                                <widget class="QToolButton" name="presetMenuButton">
+                                    <property name="text"><string>Choose preset…</string></property>
+                                    <property name="popupMode"><enum>QToolButton::InstantPopup</enum></property>
+                                </widget>
+                            </item>
+                        </layout>
+                    </item>
+                    <item>
+                        <widget class="QLabel" name="presetDescriptionLabel">
+                            <property name="textFormat"><enum>Qt::PlainText</enum></property>
+                            <property name="wordWrap"><bool>true</bool></property>
+                        </widget>
+                    </item>
+                </layout>
+            </widget>
         </item>
         <!-- Description -->
         <item>

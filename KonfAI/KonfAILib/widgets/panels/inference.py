@@ -103,15 +103,19 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         # and any other preset of it, or of an app with the same inputs and outputs. Every reference, times the
         # checkpoints, TTA copies and MC-dropout draws above, is a member (konfai-apps infer APP#a APP#b ...).
         self._references_combo = qt.QComboBox()
-        self._references_combo.toolTip = _("Add a preset to the ensemble: each preset is a run of its own.")
+        self._references_combo.setPlaceholderText(_("Add a model or preset…"))
+        self._references_combo.toolTip = _(
+            "Run several models or presets on the same inputs and combine their predictions. "
+            "Segmentation models must use the same label numbers for the same structures."
+        )
+        self._reference_labels: dict[str, str] = {}
         self._references_widget = qt.QWidget()
-        references_row = qt.QHBoxLayout(self._references_widget)
+        references_row = qt.QVBoxLayout(self._references_widget)
         references_row.setContentsMargins(0, 0, 0, 0)
         references_row.addWidget(self._references_combo)
-        references_chips = qt.QHBoxLayout()
+        references_chips = qt.QVBoxLayout()
         references_row.addLayout(references_chips)
-        references_row.addStretch(1)
-        self._references_label = qt.QLabel(_("Presets"))
+        self._references_label = qt.QLabel(_("Ensemble"))
         self.ui.formLayout_inputs.insertRow(4, self._references_label, self._references_widget)  # above Sampling
         self.reference_selector = ChipSelector(
             self._references_combo,
@@ -119,6 +123,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             None,
             1,
             on_change=lambda _selected: self._update_uncertainty_visibility(),
+            label=self._reference_labels.__getitem__,
         )
 
         # A prompted app segments from clicks placed in the views, a prediction after each, in place of Run.
@@ -303,9 +308,9 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         # on the right. QDialogButtonBox roles are not used for the utility buttons because their placement
         # is style-dependent (Fusion inserts ActionRole between OK and Cancel).
         footer = qt.QHBoxLayout()
-        reset_button = qt.QPushButton("Restore defaults")
+        reset_button = qt.QPushButton(_("Reset overrides"))
         reset_button.setToolTip(
-            "Drop every override (patch, batch and model parameters) and reopen on the app's defaults."
+            _("Clear custom patch, batch and model settings. Keep the selected preset.")
         )
         footer.addWidget(reset_button)
         saved = False  # a preset saved from the dialog holds its edits: they are no override of it
@@ -336,7 +341,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             self._param_override = {}
             self._refresh_advanced_button()
             dialog.reject()  # discard the current edits...
-            self.on_advanced_clicked()  # ...and reopen seeded from the app's own defaults
+            self.on_advanced_clicked()  # ...and reopen with the selected configuration
 
         reset_button.clicked.connect(_restore_defaults)
         outer.addLayout(footer)
@@ -741,17 +746,37 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             groups = (some_app.get_inputs(), some_app.get_outputs())
             return [(key, entry.volume_type) for group in groups for key, entry in group.items()]
 
+        def labels(some_app) -> dict:
+            return {key: label.name for key, label in (some_app.get_terminology() or {}).items()}
+
         own = entries(app)
+        own_labels = labels(app)
         combo = self.template.ui.appComboBox
         candidates = []
+        self._reference_labels.clear()
         for index in range(combo.count):
             other = combo.itemData(index)
             if other is None or not (
                 other.get_name() == app.get_name() or (app.get_outputs() and entries(other) == own)
             ):
                 continue
-            presets = list(other.get_presets())
-            candidates += [self._reference(other, preset) for preset in presets] or [other.get_name()]
+            other_labels = labels(other)
+            if own_labels and other_labels and other_labels != own_labels:
+                continue
+            name = other.get_name()
+            display = other.get_display_name()
+            self._reference_labels[name] = display
+            presets = other.get_presets()
+            if not presets:
+                candidates.append(name)
+            for preset in presets.values():
+                reference = self._reference(other, preset.name)
+                label = f"{display} · {preset.name.replace('_', ' ')}"
+                if name == app.get_name() and self._preset is None and not preset.overrides and preset.tiles:
+                    self._reference_labels[name] = label
+                    continue
+                candidates.append(reference)
+                self._reference_labels[reference] = label
         return candidates
 
     def _seed_references(self, app, selected: list[str] = ()) -> None:
@@ -762,6 +787,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         candidates = self._reference_candidates(app)
         if chosen not in candidates:
             candidates.insert(0, chosen)
+            self._reference_labels.setdefault(chosen, app.get_display_name())
         self.reference_selector.locked = chosen
         self.reference_selector.update(candidates, candidates, [chosen, *selected])  # those no longer offered drop
         self._references_label.setVisible(len(candidates) > 1)

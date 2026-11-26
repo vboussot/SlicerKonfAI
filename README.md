@@ -53,19 +53,22 @@ https://github.com/user-attachments/assets/d3728d16-1004-4100-9e8a-f31b8e72ed75
 ## ✨ Key Features
 
 - **Apps from Hugging Face, offline first**
-  The app list is built from the local Hugging Face cache and refreshed on demand. Add an app from any repository or from a local folder, download only the checkpoints you need, remove what you do not use. Each app shows an icon, a short description and a full description card with the training data and how to cite.
+  The app list is built from the local Hugging Face cache and refreshed on demand. Add an app from any repository or from a local folder, download only the checkpoints you need, remove what you do not use. Each app shows an icon, a short description and a full description card with the training data and how to cite. Use **+ → Sign in to Hugging Face…** to save a read token for a private repository. **Add from Hugging Face…** lists apps on `main` by default. Enter `owner/repository@revision` to choose a tag or branch.
 
 - **Inference on the volumes of the scene**
   Inputs are Slicer nodes (DICOM, NIfTI, NRRD, MHA, several inputs when the app declares them). Outputs come back as volumes, label maps or Segmentation nodes with the names and colours of the app, and a Show 3D button.
 
 - **Sampling controls that follow the app**
-  Preset chips (`APP#PRESET`: the preset chosen under the app, any other of its presets, or of an app with the same inputs and outputs), checkpoint chips, test-time augmentation and MC dropout appear only when the app supports them. An ensemble is their product: each preset is a run of its own, times the checkpoints and copies inside it. The *Uncertainty* checkbox keeps every member as an inference stack for the QA tab, one sequence item per member (a vector volume for a displacement field).
+  Choose the app's configuration under *Choose preset*. Use *Ensemble* to add compatible models or presets that run on the same inputs. Segmentation ensembles vote on label numbers, so the members need the same label definitions. Checkpoints and test-time copies add members to the run. The *Uncertainty* checkbox keeps an inference stack for the QA tab.
 
 - **Quality assurance, with or without a reference**
   *With reference*: the app's evaluation workflow (Dice, MAE, PSNR, SSIM and the maps it defines), with an optional mask and a transform to align the output. *No reference*: the app's uncertainty workflows on the inference stack, one tab per workflow the app declares (`inputs_uncertainties`), each with the references it reads: the spread of the members alone, of landmarks pushed through them, the disagreement of a segmentation they propagate.
 
+- **Inspect results with KonfAI Scout**
+  The *Inspect* tab can use a local vision model, Claude Code, or ChatGPT. For ChatGPT, install `konfai-scout[codex]` in Slicer's Python, make the Codex CLI available on Slicer's PATH, and run `codex login`. Choose *ChatGPT (Codex login)*. Slicer asks for confirmation before sending case views to OpenAI.
+
 - **Advanced settings and presets**
-  Override the patch size and the batch size, edit the parameters the app exposes, restore the defaults, or save the current settings as a preset of the app. Scaffold a fine-tuning app from any app that ships its training configuration.
+  Override the patch size and the batch size, edit the parameters the app exposes, reset your overrides while keeping the preset, or save the current settings as a preset of the app. Scaffold a fine-tuning app from any app that ships its training configuration.
 
 - **Local GPU, CPU or remote server**
   The device row lists the CPU and every GPU combination. A `konfai-apps-server` on another machine runs the same apps: add it with its host, port and token (kept in the OS keyring), pick one of its GPUs, and the RAM and VRAM gauges show its memory.

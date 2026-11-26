@@ -51,6 +51,7 @@ class ChipSelector:
         min_selected: int = 0,
         combo_remove: bool = True,
         on_change: Callable[[list[str]], None] | None = None,
+        label: Callable[[str], str] = _label,
     ) -> None:
         self._combo = combo
         self._layout = container_layout
@@ -58,6 +59,7 @@ class ChipSelector:
         self._min_selected = max(0, int(min_selected))
         self._on_change = on_change
         self._combo_remove = combo_remove
+        self._label = label
         #: A chip that stays: it carries no ✕ and a click leaves it.
         self.locked: str | None = None
         self._combo.connect("activated(int)", self._on_combo_activated)
@@ -95,7 +97,7 @@ class ChipSelector:
             if name in pre_selected:
                 self._add(name)
             else:
-                self._combo.addItem(_label(name), name)
+                self._combo.addItem(self._label(name), name)
         if len(self.selected()) == 0 and len(all_items) > 0:
             self._add(all_items[0])
 
@@ -115,10 +117,11 @@ class ChipSelector:
 
         # The visible label carries a ✕ affordance; the identity stays in the 'chipName' property.
         locked = text == self.locked
-        btn = QPushButton(_label(text) if locked else f"{_label(text)}  ✕")
+        label = self._label(text)
+        btn = QPushButton(label if locked else f"{label}  ✕")
         btn.setProperty("chipName", text)
         btn.flat = True
-        btn.toolTip = _label(text) if locked else f"Click to remove {_label(text)}"
+        btn.toolTip = label if locked else f"Click to remove {label}"
         btn.minimumHeight = 20
         btn.maximumHeight = 24
 
@@ -179,7 +182,7 @@ class ChipSelector:
 
         # add back to combo (avoid duplicates)
         if self._combo.findData(text) == -1:
-            self._combo.addItem(_label(text), text)
+            self._combo.addItem(self._label(text), text)
 
         self._sync()
 
