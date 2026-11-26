@@ -449,9 +449,9 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                 break
         if current_app is None:
             current_app = self.ui.appComboBox.itemData(0)
-        # Ensemble / TTA / MC-dropout defaults based on app capabilities
+        # Ensemble / TTA / MC-dropout defaults: TTA starts off, each pass costs a full inference
         if not self.get_parameter("number_of_tta"):
-            self.set_parameter("number_of_tta", str(current_app.get_maximum_tta()) if current_app else "0")
+            self.set_parameter("number_of_tta", "0")
         if not self.get_parameter("uncertainty"):
             self.set_parameter("uncertainty", "False")
         if not self.get_parameter("number_of_mc_dropout"):
@@ -543,11 +543,15 @@ class KonfAIAppTemplateWidget(AppTemplateWidget):
                 self.ui.runEvaluationButton.enabled = False
         else:
             # Uncertainty estimation: need a stack volume with more than one component
-            if inference_stack_volume and inference_stack_volume.GetNumberOfDataNodes() > 1:
+            has_stack = inference_stack_volume and inference_stack_volume.GetNumberOfDataNodes() > 1
+            if has_stack and self.qa_panel.uncertainty_inputs_ok():
                 self.ui.runEvaluationButton.toolTip = _("Start uncertainty estimation")
                 self.ui.runEvaluationButton.enabled = True
+            elif has_stack:
+                self.ui.runEvaluationButton.toolTip = _("Select the references this uncertainty tab requires")
+                self.ui.runEvaluationButton.enabled = False
             else:
-                self.ui.runEvaluationButton.toolTip = _("Select input volume")
+                self.ui.runEvaluationButton.toolTip = _("Run an inference with several members and Uncertainty ticked")
                 self.ui.runEvaluationButton.enabled = False
 
         # Suggest an output volume base name derived from input volume name

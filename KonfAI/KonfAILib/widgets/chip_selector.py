@@ -58,6 +58,8 @@ class ChipSelector:
         self._min_selected = max(0, int(min_selected))
         self._on_change = on_change
         self._combo_remove = combo_remove
+        #: A chip that stays: it carries no ✕ and a click leaves it.
+        self.locked: str | None = None
         self._combo.connect("activated(int)", self._on_combo_activated)
         if self._spinbox is not None:
             self._spinbox.setMinimum(self._min_selected)
@@ -112,16 +114,18 @@ class ChipSelector:
             return
 
         # The visible label carries a ✕ affordance; the identity stays in the 'chipName' property.
-        btn = QPushButton(f"{_label(text)}  ✕")
+        locked = text == self.locked
+        btn = QPushButton(_label(text) if locked else f"{_label(text)}  ✕")
         btn.setProperty("chipName", text)
         btn.flat = True
-        btn.toolTip = f"Click to remove {_label(text)}"
+        btn.toolTip = _label(text) if locked else f"Click to remove {_label(text)}"
         btn.minimumHeight = 20
         btn.maximumHeight = 24
 
         shadow = text not in self._available_items
         btn.setProperty("shadow", "1" if shadow else "0")
-        btn.setStyleSheet("""
+        btn.setStyleSheet(
+            """
             QPushButton {
                 color: #0b3d91;
                 background-color: #edf3ff;
@@ -140,12 +144,14 @@ class ChipSelector:
             }
             QPushButton[shadow="1"]:hover { background-color: #e5e7eb; }
             QPushButton[shadow="1"]:pressed { background-color: #e5e7eb; }
-            """)
+            """
+        )
 
         def _remove():
             self._remove(text)
 
-        btn.clicked.connect(_remove)
+        if not locked:
+            btn.clicked.connect(_remove)
         self._layout.insertWidget(self._insert_index_before_spacer(), btn)
 
         if self._combo_remove:

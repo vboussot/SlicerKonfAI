@@ -180,6 +180,31 @@
                 </item>
             </layout>
         </item>
+        <!-- Preset: shown when the app has presets -->
+        <item>
+            <layout class="QHBoxLayout" name="hLayout_preset">
+                <item>
+                    <widget class="QLabel" name="label_preset">
+                        <property name="text">
+                        <string>Preset:</string>
+                        </property>
+                    </widget>
+                </item>
+                <item>
+                    <widget class="QComboBox" name="presetComboBox">
+                        <property name="toolTip">
+                        <string>Run the app with one of its presets: a named set of parameters. The Advanced dialog starts from it.</string>
+                        </property>
+                        <property name="sizePolicy">
+                        <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                            <horstretch>1</horstretch>
+                            <verstretch>0</verstretch>
+                        </sizepolicy>
+                        </property>
+                    </widget>
+                </item>
+            </layout>
+        </item>
         <!-- Description -->
         <item>
          <widget class="QFrame" name="descriptionCard">
