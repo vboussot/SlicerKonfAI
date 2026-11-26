@@ -25,6 +25,7 @@ set(MODULE_PYTHON_SCRIPTS
   ${MODULE_NAME}Lib/widgets/panels/__init__.py
   ${MODULE_NAME}Lib/widgets/panels/base.py
   ${MODULE_NAME}Lib/widgets/panels/inference.py
+  ${MODULE_NAME}Lib/widgets/panels/inspect_tab.py
   ${MODULE_NAME}Lib/widgets/panels/qa.py
   ${MODULE_NAME}Lib/widgets/panels/selection.py
   )
