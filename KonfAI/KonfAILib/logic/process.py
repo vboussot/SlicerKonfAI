@@ -21,7 +21,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from qt import QProcess
+from qt import QProcess, QProcessEnvironment
 
 # tqdm renders nested/multi-line progress bars with ANSI cursor-control sequences (e.g. ``\x1b[A`` to move
 # up). Terminals interpret them invisibly, but a GUI log panel shows them verbatim (``[A``). Strip every CSI
@@ -48,6 +48,7 @@ class Process(QProcess):
         super().__init__(self)
         self.readyReadStandardOutput.connect(self.on_stdout_ready)
         self.readyReadStandardError.connect(self.on_stderr_ready)
+        self.errorOccurred.connect(self._on_process_error)
 
         # Callbacks defined by the KonfAI core widget
         self._update_logs = update_logs
@@ -64,7 +65,7 @@ class Process(QProcess):
           - Extracts numerical progress (0–100 %) and speed (e.g., '5 it/s')
             from the log line when present, and forwards them to the UI.
         """
-        line = _ANSI_RE.sub("", self.readAllStandardOutput().data().decode()).strip()
+        line = _ANSI_RE.sub("", self.readAllStandardOutput().data().decode(errors="replace")).strip()
         if line:
             # Keep only the last sub-line if carriage returns are used for progress overwrite
             line = line.replace("\r\n", "\n").split("\r")[-1]
@@ -99,7 +100,7 @@ class Process(QProcess):
         its percentage drives the progress bar, while genuine error lines are forwarded to the
         module log panel so failures (e.g. an evaluation crash) stay visible from the GUI.
         """
-        data = _ANSI_RE.sub("", self.readAllStandardError().data().decode())
+        data = _ANSI_RE.sub("", self.readAllStandardError().data().decode(errors="replace"))
         if not data.strip():
             return
         for chunk in data.replace("\r\n", "\n").split("\n"):
@@ -120,7 +121,20 @@ class Process(QProcess):
                 continue
             self._update_logs(f"[stderr] {line}", False)
 
-    def run(self, command: str, work_dir: Path, args: list[str], on_end_function: Callable[[], None]) -> None:
+    def _on_process_error(self, error) -> None:
+        if error == QProcess.FailedToStart:
+            self._update_logs(f"Could not start the process. {self.errorString()}", False)
+            self._running_setter(False)
+
+    def run(
+        self,
+        command: str,
+        work_dir: Path,
+        args: list[str],
+        on_end_function: Callable[[], None],
+        *,
+        environment: QProcessEnvironment | None = None,
+    ) -> None:
         """
         Start a new subprocess with the given command and arguments.
 
@@ -136,6 +150,7 @@ class Process(QProcess):
             Callback to execute once the process has finished.
         """
         self.setWorkingDirectory(str(work_dir))
+        self.setProcessEnvironment(environment if environment is not None else QProcessEnvironment())
 
         t0 = time.perf_counter()
 

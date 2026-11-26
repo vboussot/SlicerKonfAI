@@ -83,12 +83,14 @@ class InteractiveSegmentation(QWidget):
         row.addWidget(new_object)
         row.addWidget(reset)
         self.layout().addLayout(row)
-        self.status = QLabel("Place a point to segment.")
+        self.status = QLabel("Select an image, then place a positive point or draw a box.")
+        self.status.setWordWrap(True)
         self.layout().addWidget(self.status)
 
         self.process = QProcess()
-        self.process.setProcessChannelMode(QProcess.MergedChannels)  # an unread stderr would fill and stall it
         self.process.readyReadStandardOutput.connect(self._on_output)
+        self.process.readyReadStandardError.connect(self._on_worker_stderr)
+        self.process.errorOccurred.connect(self._on_worker_error)
         self.process.finished.connect(self._on_worker_finished)
         self._worker_key = None  # (app, devices) the running worker serves
         self._ready = False
@@ -128,7 +130,7 @@ class InteractiveSegmentation(QWidget):
             return
         self._stop_worker()
         self._worker_key, self._ready = key, False
-        args = ["-m", "konfai_apps.interactive", self._app.get_name()]
+        args = ["-u", "-m", "konfai_apps.interactive", self._app.get_name()]
         if devices:
             args += ["--gpu", *devices]
         environment = QProcessEnvironment.systemEnvironment()
@@ -140,9 +142,9 @@ class InteractiveSegmentation(QWidget):
             args += options
         self.process.setProcessEnvironment(environment)
         self.process.setWorkingDirectory(str(self._dir))
-        self.process.start(sys.executable, args)
         where = f" on {server.name}" if server is not None else ""
-        self.status.setText(f"Loading {self._app.get_name()}{where}…")
+        self.status.setText(f"Starting {self._app.get_display_name()}{where}…")
+        self.process.start(sys.executable, args)
 
     def _stop_worker(self) -> None:
         self._worker_key = None  # a stop of ours, not a crash
@@ -154,16 +156,31 @@ class InteractiveSegmentation(QWidget):
                 self.process.waitForFinished(2000)
         self._ready, self._busy, self._pending = False, False, False
 
+    def _on_worker_error(self, error) -> None:
+        if error == QProcess.FailedToStart and self._worker_key is not None:
+            self._worker_key = None
+            self._show_error(f"Could not start the segmentation worker. {self.process.errorString()}")
+
+    def _on_worker_stderr(self) -> None:
+        message = self.process.readAllStandardError().data().decode(errors="replace").strip()
+        if message:
+            self.panel._update_logs(message, False)
+
+    def _show_error(self, message: str) -> None:
+        self.status.setText(message)
+        self.panel._update_logs(message, False)
+
     def _on_worker_finished(self, *_) -> None:
         if self._worker_key is not None:  # not stopped by us
-            self.status.setText("The app's worker stopped; see the Python console. Place a point to restart it.")
+            self._show_error("The segmentation worker stopped. See the module log and place a point to retry.")
         self._worker_key, self._ready, self._busy, self._sent = None, False, False, None
 
     def _on_output(self) -> None:
         while self.process.canReadLine():
             line = self.process.readLine().data().decode(errors="replace").rstrip()
             if not line.startswith(PREFIX):
-                print(line)
+                if line:
+                    self.panel._update_logs(line, False)
                 continue
             word, _, rest = line[len(PREFIX) :].strip().partition(" ")
             if word == "ready":
@@ -176,11 +193,14 @@ class InteractiveSegmentation(QWidget):
             if int(request) != self._request:
                 pass  # an answer for prompts reset since: nothing to show
             elif word == "done":
-                self._load(output)
-                self.status.setText(f"Segmented in {float(detail):.1f} s ({len(self._order)} prompts).")
+                try:
+                    self._load(output, float(detail))
+                except Exception as error:
+                    self._sent = None
+                    self._show_error(f"Could not display the segmentation. {error}")
             else:
                 self._sent = None  # the same prompts may be tried again
-                self.status.setText(f"The app refused: {detail}")
+                self._show_error(f"Segmentation failed. {detail}")
             shutil.rmtree(output, ignore_errors=True)  # loaded, or no longer wanted
             if self._pending:
                 self._pending = False
@@ -264,8 +284,18 @@ class InteractiveSegmentation(QWidget):
         self._run()
 
     def _run(self) -> None:
+        try:
+            self._send_prediction()
+        except Exception as error:
+            self._busy, self._sent = False, None
+            self._show_error(f"Could not prepare the prediction. {error}")
+
+    def _send_prediction(self) -> None:
         points, kinds = self._prompts()
-        if not len(points) or kinds.count("box") % 2:  # nothing to show yet, or a box waiting for its second corner
+        if not len(points):
+            return
+        if kinds.count("box") % 2:
+            self.status.setText("Place the second corner of the box.")
             return
         volume_node = self.panel.ui.inputVolumeSelector.currentNode()
         if volume_node is None:
@@ -281,6 +311,8 @@ class InteractiveSegmentation(QWidget):
         if sent == self._sent:
             return
         if self._volume != state:
+            self.status.setText("Preparing the image for segmentation…")
+            self.status.repaint()
             image = sitkUtils.PullVolumeFromSlicer(volume_node)
             sitk.WriteImage(image, str(self._dir / "Volume.mha"))
             self._volume, self._header = state, image
@@ -300,7 +332,8 @@ class InteractiveSegmentation(QWidget):
         self._busy, self._sent, self._target = True, sent, (volume_node, segmentation, segment)
         self.status.setText("Segmenting…")
         request = {"id": self._request, "inputs": inputs, "output": str(output)}
-        self.process.write((json.dumps(request) + "\n").encode())
+        if self.process.write((json.dumps(request) + "\n").encode()) < 0:
+            raise RuntimeError("Could not send the prompts to the segmentation worker.")
 
     def _current_segment(self, volume_node):
         """The output segmentation and the current object's segment in it, made if missing."""
@@ -315,10 +348,10 @@ class InteractiveSegmentation(QWidget):
             self._segment = segmentation.GetSegmentation().AddEmptySegment("", f"Object {count + 1}")
         return segmentation, self._segment
 
-    def _load(self, output: Path) -> None:
+    def _load(self, output: Path, seconds: float) -> None:
         found = sorted(output.rglob("*.mha"))
         if not found:
-            self.status.setText(f"The app wrote no image under {output}.")
+            self._show_error("The model returned no segmentation volume.")
             return
         # Into what the request was made for, whatever the selectors show now.
         volume_node, segmentation, segment = self._target
@@ -330,6 +363,10 @@ class InteractiveSegmentation(QWidget):
             return
         mask = (sitk.GetArrayFromImage(sitk.ReadImage(str(found[0]))) > 0).astype(np.uint8)
         slicer.util.updateSegmentBinaryLabelmapFromArray(mask, segmentation, segment, volume_node)
+        if mask.any():
+            self.status.setText(f"Segmented in {seconds:.1f} s ({len(self._order)} prompts).")
+        else:
+            self.status.setText("The model returned an empty mask. Try a positive point inside the object.")
 
     # ---- objects ----------------------------------------------------------------------------------------------
 

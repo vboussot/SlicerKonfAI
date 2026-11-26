@@ -267,8 +267,7 @@ class AppTemplateWidget(QWidget):
             try:
                 function(remote_server, device)
             except Exception as e:
-                # Log the exception for debugging and reset running state
-                print(e)
+                self._update_logs(f"Could not start processing. {e}", False)
                 self.set_running(False)
         else:
             # Stop current operation

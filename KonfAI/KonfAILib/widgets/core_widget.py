@@ -28,8 +28,9 @@ from qt import (
     QCursor,
     QDialog,
     QIcon,
-    QSettings,
     QMenu,
+    QScrollArea,
+    QSettings,
     QSize,
     Qt,
     QTabWidget,
@@ -93,7 +94,14 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
         # The .ui root layout already carries the margins; a second layer here doubles every gap
         # (header-to-content in particular).
         self.layout().setContentsMargins(0, 0, 0, 0)
-        self.layout().addWidget(ui_widget)
+        scroll = QScrollArea()
+        scroll.setObjectName("KonfAIControlScrollArea")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        scroll.setWidget(ui_widget)
+        self.layout().addWidget(scroll)
+        self._content_layout = ui_widget.layout()
         self.ui = slicer.util.childWidgetVariables(ui_widget)
         self.initialize_parameter_node()
         # Quiet header, one language for every extension: the title in spaced small caps between
@@ -305,7 +313,7 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        for _ in range(32):  # give uvicorn a moment to bind before the browser tab loads
+        for _attempt in range(32):  # give uvicorn a moment to bind before the browser tab loads
             if self._studio_answers():
                 break
             slicer.app.processEvents()
@@ -442,11 +450,11 @@ class KonfAICoreWidget(QWidget, VTKObservationMixin, ScriptedLoadableModuleLogic
                     current_app.enter()
 
             tab_widget.currentChanged.connect(on_tab_changed)
-            self.KonfAICoreWidget.layout().insertWidget(1, tab_widget)
+            self._content_layout.insertWidget(1, tab_widget)
         else:
             # Single app case: directly insert widget into layout
             app = apps[0]
-            self.KonfAICoreWidget.layout().insertWidget(1, app)
+            self._content_layout.insertWidget(1, app)
             self._current_konfai_app = app
 
         # Initialize each app with shared callbacks and parameter node

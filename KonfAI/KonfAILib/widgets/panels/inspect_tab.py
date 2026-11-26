@@ -19,8 +19,12 @@ it finds, each finding one click away in the slice views.
 
 A prototype: the inspector is chosen in the tab itself (it belongs beside the remote server), no reference yet."""
 
+import importlib.util
 import json
+import os
 import shutil
+import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -164,30 +168,36 @@ class InspectTab(qt.QWidget):
     def run(self, remote_server, devices: list[str]) -> None:
         """Export the case, run ``konfai-scout inspect`` on it, show its report."""
         name, provider, destination = INSPECTORS[self.inspector.currentIndex]
-        command = shutil.which("konfai-scout")
-        if command is None:
+        if importlib.util.find_spec("konfai_scout") is None:
             package = "konfai-scout[codex]" if provider == "codex" else "konfai-scout"
-            return self._stop(f"[KonfAI] Install {package} in Slicer's Python to inspect this result.")
-        if provider == "codex" and shutil.which("codex") is None:
-            return self._stop("[KonfAI] Install the Codex CLI, make it available on Slicer's PATH and run codex login.")
+            return self._stop(f"Install {package} in Slicer's Python to inspect this result.")
+        environment = qt.QProcessEnvironment.systemEnvironment()
+        if provider == "codex":
+            if importlib.util.find_spec("fastmcp") is None:
+                return self._stop("Install konfai-scout[codex] in Slicer's Python to enable ChatGPT.")
+            path = os.pathsep.join((environment.value("PATH") or os.defpath, str(Path.home() / ".local" / "bin")))
+            if shutil.which("codex", path=path) is None:
+                return self._stop("Install the Codex CLI, add it to Slicer's PATH and run codex login.")
+            environment.insert("PATH", path)
         if destination and not slicer.util.confirmOkCancelDisplay(
             f"Scout will send views of this case to {destination} for inspection.\n\n"
             "Do not continue with data you are not allowed to share.",
             windowTitle="Images leave this machine",
         ):
-            return self._stop("[KonfAI] Inspection cancelled: nothing was sent.")
+            return self._stop("Inspection cancelled.")
         settings = qt.QSettings()
         settings.setValue(SETTINGS + "Inspector", self.inspector.currentIndex)
         settings.setValue(SETTINGS + "Url", self.url.text)
         settings.setValue(SETTINGS + "Model", self.model.text)
         settings.setValue(SETTINGS + "Depth", self.depth_choice.currentIndex)
         self._show(None)
+        self.verdict.setText(f"Preparing inspection with {name}…")
 
         task = self.task.currentText
         (first_role, _), (second_role, _), _ = TASKS[task]
         work = self.panel._work_dir
         first, second = self.first.currentNode(), self.second.currentNode()
-        args = ["inspect", "--task", task, "--name", second.GetName(), "--out", "Inspect", "--provider", provider]
+        args = ["-u", "-m", "konfai_scout.cli", "inspect", "--task", task, "--name", second.GetName(), "--out", "Inspect", "--provider", provider]
         args += ["--depth", DEPTHS[self.depth_choice.currentIndex][0]]
         if task == "segmentation":
             labels = self._export_labels(second, first, work / "prediction.mha")
@@ -210,11 +220,11 @@ class InspectTab(qt.QWidget):
         def on_end() -> None:
             report = work / "Inspect" / "report.json"
             if not report.is_file():
-                self.panel._update_logs("[KonfAI] The inspection left no report: see the lines above.", False)
-                return
+                return self._stop("Scout did not produce a report. See the module log for details.")
             self._show(json.loads(report.read_text()))
 
-        self.panel.process.run(command, work, args, on_end)
+        self.verdict.setText(f"Inspecting with {name}…")
+        self.panel.process.run(sys.executable, work, args, on_end, environment=environment)
 
     def _export_labels(self, result, image, path) -> str:
         """A segmentation as a label map on the image's grid (Scout views a case on one grid); its label names."""
@@ -232,6 +242,7 @@ class InspectTab(qt.QWidget):
         )
 
     def _stop(self, message: str) -> None:
+        self.verdict.setText(message)
         self.panel._update_logs(message, False)
         self.panel.set_running(False)
 
