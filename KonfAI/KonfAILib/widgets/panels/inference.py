@@ -27,12 +27,12 @@ import qt
 import SimpleITK as sitk  # noqa: N813
 import sitkUtils
 import slicer
-from slicer.i18n import tr as _
-
 from KonfAILib.logic.servers import RemoteServer
 from KonfAILib.widgets import helpers, io_selectors
 from KonfAILib.widgets.chip_selector import ChipSelector
+from KonfAILib.widgets.interactive import InteractiveSegmentation
 from KonfAILib.widgets.panels.base import KonfAIAppPanel
+from slicer.i18n import tr as _
 
 if TYPE_CHECKING:
     from KonfAILib.widgets.app_template import KonfAIAppTemplateWidget
@@ -120,6 +120,11 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             1,
             on_change=lambda _selected: self._update_uncertainty_visibility(),
         )
+
+        # A prompted app segments from clicks placed in the views, a prediction after each, in place of Run.
+        self.interactive = InteractiveSegmentation(self)
+        self.interactive.setVisible(False)
+        self.layout().addWidget(self.interactive)
 
     def _update_uncertainty_visibility(self) -> None:
         """Show the Uncertainty checkbox only when there is a spread to measure: several
@@ -805,8 +810,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         if checkpoints_name_param and isinstance(checkpoints_name_param, str):
             checkpoints_name = checkpoints_name_param.split(",")
         self.chip_selector.update(app.get_checkpoints_name_available(), app.get_checkpoints_name(), checkpoints_name)
-        if not self.get_parameter("number_of_tta") or int(self.get_parameter("number_of_tta")) > app.get_maximum_tta():
-            self.set_parameter("number_of_tta", str(app.get_maximum_tta()))
+        self.set_parameter("number_of_tta", min(int(self.get_parameter("number_of_tta") or 0), app.get_maximum_tta()))
 
         if (
             not self.get_parameter("number_of_mc_dropout")
@@ -857,6 +861,29 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         self._update_uncertainty_visibility()
 
         self._rebuild_io_selectors(app)
+
+        # Its prompts and last mask are the interactive mode's own, made from the clicks and the segment.
+        prompted = self.interactive.set_app(app)
+        self.ui.extraInputsForm.setVisible(not prompted)
+        self.ui.runInferenceButton.setVisible(not prompted)
+        if prompted:  # a session runs the app as published: no checkpoint, TTA or MC-dropout choice
+            for widget in (
+                self.ui.label_stochastic,
+                self.ui.label_ensemble,
+                self.ui.checkpointsComboBox,
+                self.ui.ensembleSpinBox,
+                self.ui.label_tta,
+                self.ui.ttaSpinBox,
+                self.ui.label_mcdo,
+                self.ui.mcDropoutSpinBox,
+                self.ui.uncertaintyCheckBox,
+                self.ui.label_selected_checkpoints,
+                self.ui.selectedCheckpointsWidget,
+            ):
+                widget.setVisible(False)
+
+    def cleanup(self) -> None:
+        self.interactive.shutdown()
 
     def _rebuild_io_selectors(self, app) -> None:
         """

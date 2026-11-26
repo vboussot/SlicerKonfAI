@@ -17,8 +17,14 @@
 """Reusable combo-to-chips selector (ensemble checkpoints)."""
 
 from collections.abc import Callable
+from pathlib import PurePath
 
 from qt import QPushButton
+
+
+def _label(name: str) -> str:
+    """What the user reads for an item: a checkpoint file without its extension. The name itself stays the identity."""
+    return PurePath(name).stem if PurePath(name).suffix in (".pt", ".safetensors") else name
 
 
 class ChipSelector:
@@ -89,7 +95,7 @@ class ChipSelector:
             if name in pre_selected:
                 self._add(name)
             else:
-                self._combo.addItem(name)
+                self._combo.addItem(_label(name), name)
         if len(self.selected()) == 0 and len(all_items) > 0:
             self._add(all_items[0])
 
@@ -109,16 +115,17 @@ class ChipSelector:
 
         # The visible label carries a ✕ affordance; the identity stays in the 'chipName' property.
         locked = text == self.locked
-        btn = QPushButton(text if locked else f"{text}  ✕")
+        btn = QPushButton(_label(text) if locked else f"{_label(text)}  ✕")
         btn.setProperty("chipName", text)
         btn.flat = True
-        btn.toolTip = text if locked else f"Click to remove {text}"
+        btn.toolTip = _label(text) if locked else f"Click to remove {_label(text)}"
         btn.minimumHeight = 20
         btn.maximumHeight = 24
 
         shadow = text not in self._available_items
         btn.setProperty("shadow", "1" if shadow else "0")
-        btn.setStyleSheet("""
+        btn.setStyleSheet(
+            """
             QPushButton {
                 color: #0b3d91;
                 background-color: #edf3ff;
@@ -137,7 +144,8 @@ class ChipSelector:
             }
             QPushButton[shadow="1"]:hover { background-color: #e5e7eb; }
             QPushButton[shadow="1"]:pressed { background-color: #e5e7eb; }
-            """)
+            """
+        )
 
         def _remove():
             self._remove(text)
@@ -147,7 +155,7 @@ class ChipSelector:
         self._layout.insertWidget(self._insert_index_before_spacer(), btn)
 
         if self._combo_remove:
-            idx = self._combo.findText(text)
+            idx = self._combo.findData(text)
             if idx != -1:
                 self._combo.removeItem(idx)
         self._sync()
@@ -170,8 +178,8 @@ class ChipSelector:
                 break
 
         # add back to combo (avoid duplicates)
-        if self._combo.findText(text) == -1:
-            self._combo.addItem(text)
+        if self._combo.findData(text) == -1:
+            self._combo.addItem(_label(text), text)
 
         self._sync()
 
@@ -186,8 +194,7 @@ class ChipSelector:
             self._on_change(sel)
 
     def _on_combo_activated(self, index: int) -> None:
-        text = self._combo.itemText(index)
-        self._add(text)
+        self._add(self._combo.itemData(index))
 
     def _insert_index_before_spacer(self) -> int:
         insert_index = self._layout.count()
