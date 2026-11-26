@@ -26,7 +26,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 import qt
 import slicer
-
 from KonfAILib.logic.mrml import has_node_content
 
 if TYPE_CHECKING:
@@ -245,7 +244,9 @@ class InspectTab(qt.QWidget):
         if report.get("error"):
             self.verdict.setText(f"The inspection stopped: {report['error']}")
         elif conclusion := report.get("conclusion"):
-            self.verdict.setText(f"<b>{conclusion['verdict'].replace('_', ' ').capitalize()}.</b> {conclusion['summary']}")
+            self.verdict.setText(
+                f"<b>{conclusion['verdict'].replace('_', ' ').capitalize()}.</b> {conclusion['summary']}"
+            )
         for observation in report.get("observations", []):
             row = self.findings.rowCount
             self.findings.insertRow(row)

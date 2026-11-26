@@ -17,21 +17,22 @@
 """Inference panel: input/mask/output selection, checkpoint ensemble,
 TTA/MC-dropout sampling options and the inference run itself."""
 
+import json
 import random
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
+import qt
 import SimpleITK as sitk  # noqa: N813
 import sitkUtils
 import slicer
-from slicer.i18n import tr as _
-
 from KonfAILib.logic.servers import RemoteServer
 from KonfAILib.widgets import helpers, io_selectors
 from KonfAILib.widgets.chip_selector import ChipSelector
 from KonfAILib.widgets.interactive import InteractiveSegmentation
 from KonfAILib.widgets.panels.base import KonfAIAppPanel
+from slicer.i18n import tr as _
 
 if TYPE_CHECKING:
     from KonfAILib.widgets.app_template import KonfAIAppTemplateWidget
@@ -65,9 +66,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         # setSegmentationNode() rejects non-segmentation nodes; the output selector also holds scalar
         # volumes (registration / synthesis outputs), so route through a type guard instead of connecting
         # setSegmentationNode directly (which would raise TypeError on a scalar-volume output).
-        self.ui.outputVolumeSelector.connect(
-            "currentNodeChanged(vtkMRMLNode*)", self._sync_segmentation_show3d
-        )
+        self.ui.outputVolumeSelector.connect("currentNodeChanged(vtkMRMLNode*)", self._sync_segmentation_show3d)
         self.ui.segmentationShow3DButton.setVisible(False)
 
         self.ui.ttaSpinBox.valueChanged.connect(self.on_tta_changed)
@@ -80,6 +79,8 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         # Tuned model parameters {config key: value}; empty = the app's own config defaults. A nested value
         # (e.g. the whole `resolutions` matrix) is just one entry here — it gets no special-casing.
         self._param_override: dict[str, object] = {}
+        # The app's preset the run uses (APP#PRESET), None for its base config.
+        self._preset: str | None = None
         self.ui.advancedButton.clicked.connect(self.on_advanced_clicked)
 
         # Run button for inference
@@ -98,6 +99,28 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             on_change=self.on_checkpoint_selected_change,
         )
 
+        # The app references the run ensembles (APP#PRESET), one run each: the preset chosen under the app selector
+        # and any other preset of it, or of an app with the same inputs and outputs. Every reference, times the
+        # checkpoints, TTA copies and MC-dropout draws above, is a member (konfai-apps infer APP#a APP#b ...).
+        self._references_combo = qt.QComboBox()
+        self._references_combo.toolTip = _("Add a preset to the ensemble: each preset is a run of its own.")
+        self._references_widget = qt.QWidget()
+        references_row = qt.QHBoxLayout(self._references_widget)
+        references_row.setContentsMargins(0, 0, 0, 0)
+        references_row.addWidget(self._references_combo)
+        references_chips = qt.QHBoxLayout()
+        references_row.addLayout(references_chips)
+        references_row.addStretch(1)
+        self._references_label = qt.QLabel(_("Presets"))
+        self.ui.formLayout_inputs.insertRow(4, self._references_label, self._references_widget)  # above Sampling
+        self.reference_selector = ChipSelector(
+            self._references_combo,
+            references_chips,
+            None,
+            1,
+            on_change=lambda _selected: self._update_uncertainty_visibility(),
+        )
+
         # A prompted app segments from clicks placed in the views, a prediction after each, in place of Run.
         self.interactive = InteractiveSegmentation(self)
         self.interactive.setVisible(False)
@@ -108,6 +131,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         checkpoints/presets selected, or TTA / MC-dropout passes, on an app that supports it."""
         multi_sample = (
             len(self.chip_selector.selected()) > 1
+            or len(self.references()) > 1
             or self.ui.ttaSpinBox.value > 0
             or self.ui.mcDropoutSpinBox.value > 0
         )
@@ -244,21 +268,23 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         # sparse tree from the model TYPES>}. Each value is rendered purely by STRUCTURE, overlaid with its
         # constraint (choices -> dropdown, {min,max} -> spin bounds). A nested value such as the per-resolution
         # `resolutions` matrix is just one entry, edited by the same recursive editor — no special case. No
-        # app.json declaration is needed; "Save as local app" bakes the current values into a local copy.
+        # app.json declaration is needed; "Save as preset" keeps the current values as a preset of the app.
+        # The parameters start from the preset chosen under the app selector: an edit is a --set after its own.
         try:
             params = app.get_parameters() if (app is not None and hasattr(app, "get_parameters")) else {}
         except Exception:  # noqa: BLE001 - a config/type read failure must not break the dialog
             params = {}
         values = params.get("values") or {}
         constraints = params.get("constraints") or {}
-        param_widgets: list[tuple[str, object, object]] = []
+        param_widgets: list[tuple[str, object, object, object, object]] = []
         if values:
             add_section("Model parameters")
             scalars = None  # scalar rows share one card; a nested block in between starts a fresh one
             for name, default in values.items():
                 current = self._param_override.get(name, default)
                 widget, reader = self._build_value_editor(current, constraints.get(name), name)
-                param_widgets.append((name, default, reader))
+                # What the editor reads back untouched: a value it cannot show exactly is still no edit.
+                param_widgets.append((name, default, current, reader(), reader))
                 if isinstance(default, (dict, list)):
                     # A nested / repeatable value (e.g. the resolutions matrix) takes the full width on the
                     # gray canvas, its name a header above — its own inner cards carry the hierarchy.
@@ -278,15 +304,20 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         # is style-dependent (Fusion inserts ActionRole between OK and Cancel).
         footer = qt.QHBoxLayout()
         reset_button = qt.QPushButton("Restore defaults")
-        reset_button.setToolTip("Drop every override (patch, batch and model parameters) and reopen on the app's defaults.")
+        reset_button.setToolTip(
+            "Drop every override (patch, batch and model parameters) and reopen on the app's defaults."
+        )
         footer.addWidget(reset_button)
-        if values:
+        saved = False  # a preset saved from the dialog holds its edits: they are no override of it
+        if values and hasattr(app, "save_preset"):
 
             def _on_save():
-                self._save_as_local_app(app, param_widgets, dialog)
+                nonlocal saved
+                if self._save_as_preset(app, param_widgets, dialog):
+                    saved = True
 
-            save_button = qt.QPushButton("Save as local app…")
-            save_button.setToolTip("Copy this app into a local folder with the current parameters as its defaults.")
+            save_button = qt.QPushButton("Save as preset…")
+            save_button.setToolTip("Keep the current parameters as a preset of this app: a name for their --set.")
             save_button.clicked.connect(_on_save)
             footer.addWidget(save_button)
         footer.addStretch(1)
@@ -326,7 +357,8 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             self._patch_override = [spin.value for spin in spins]
             self._batch_override = batch_spin.value
         # Model-parameter overrides apply regardless of the patch/batch 'auto' toggle.
-        self._param_override = self._collect_param_overrides(param_widgets)
+        if not saved:
+            self._param_override = self._collect_param_overrides(param_widgets)
         self._refresh_advanced_button()
 
     def _advanced_gear_icon(self, modified: bool):
@@ -349,9 +381,11 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         import qt
 
         self.ui.advancedButton.setIconSize(qt.QSize(20, 20))
-        if self._patch_override or self._batch_override or self._param_override:
+        if self._patch_override or self._batch_override or self._param_override or self._preset:
             patch = "x".join(str(v) for v in self._patch_override) if self._patch_override else "auto"
             tip = f"Override active — patch {patch}, batch {self._batch_override or 'auto'}"
+            if self._preset:
+                tip += f", preset {self._preset}"
             if self._param_override:
                 tip += f", {len(self._param_override)} parameter(s)"
             self.ui.advancedButton.setIcon(self._advanced_gear_icon(True))
@@ -368,6 +402,8 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         e.g. a feature-model ref ``VBoussot/impact-torchscript-models:MIND/R1D2_3D.pt`` (the ``:`` would
         otherwise read as a mapping) — and lists quote each string element the same way.
         """
+        if value is None:  # an unset entry of a nested value: YAML's null, not the string "None"
+            return "null"
         if isinstance(value, bool):
             return "true" if value else "false"
         if isinstance(value, str):
@@ -451,7 +487,8 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
                 combo.setMinimumWidth(240)  # wide enough to read a full model ref without truncation
                 combo.addItems([str(option) for option in choices])
                 combo.setCurrentText(str(v))
-                return combo, (lambda: combo.currentText)
+                # The choice itself (an int stays an int), else the text typed in.
+                return combo, (lambda: next((o for o in choices if str(o) == combo.currentText), combo.currentText))
             if isinstance(v, bool):  # bool before int (bool is a subclass of int)
                 w = qt.QCheckBox()
                 w.setChecked(v)
@@ -474,6 +511,22 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             if isinstance(v, str):
                 w = qt.QLineEdit(str(v))
                 return w, (lambda: w.text)
+            if v is None:  # unset (an optional parameter): empty stays None, a number reads as one
+                w = qt.QLineEdit()
+                w.setPlaceholderText("None")
+
+                def read_optional():
+                    text = w.text.strip()
+                    if not text:
+                        return None
+                    for kind in (int, float):
+                        try:
+                            return kind(text)
+                        except ValueError:
+                            pass
+                    return text
+
+                return w, read_optional
             # list of scalars (or empty): comma-separated, element type inferred for the round-trip
             as_list = v if isinstance(v, list) else []
             bools = any(isinstance(item, bool) for item in as_list)
@@ -595,14 +648,27 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             state["read"] = read
             outer.addWidget(widget)
 
+        def like(original, node):
+            # A dict-of-objects edits as a list, and an empty one reads back as []: give it back as the mapping it
+            # was ({}), so an untouched `levels: {}` is no edit, and a --set of it no list where a mapping goes.
+            if isinstance(original, dict) and node == []:
+                return {}
+            if isinstance(original, dict) and isinstance(node, dict):
+                return {key: like(original.get(key), val) for key, val in node.items()}
+            return node
+
         rebuild()
-        return container, (lambda: to_output(state["read"]()))
+        return container, (lambda: like(value, to_output(state["read"]())))
 
     def _collect_param_overrides(self, param_widgets) -> dict:
-        """Keep only the parameters whose edited value differs from the config default."""
+        """Keep only the parameters whose value differs from the config default. A parameter the user did not
+        touch keeps the value it was shown with: an editor that reads a value back in another form (None as an
+        empty list, an empty mapping as []) must not turn it into a --set the app refuses."""
         overrides: dict = {}
-        for name, default, reader in param_widgets:
+        for name, default, current, untouched, reader in param_widgets:
             value = reader()
+            if value == untouched:
+                value = current
             if value is not None and value != default:
                 overrides[name] = value
         return overrides
@@ -614,48 +680,123 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             args += ["--set", f"{name}={self._format_config_value(value)}"]
         return args
 
-    def _save_as_local_app(self, app, param_widgets, dialog) -> None:
-        """Export the app into a local folder with the current parameters baked in as defaults (à la fine-tune)."""
-        import re
+    def _save_as_preset(self, app, param_widgets, dialog) -> bool:
+        """Keep the current parameters as a preset of the app: the chosen preset's --set, then the edits.
 
+        konfai-apps writes it where the user may: their presets file for an app of the Hugging Face cache, the app's
+        own app.json for a local app folder. A preset is flat, so one saved from another carries its --set.
+        """
         import qt
-        from konfai_apps.app_repository import LocalAppRepositoryFromDirectory
 
-        overrides = self._collect_param_overrides(param_widgets)
-        set_args = [f"{name}={self._format_config_value(value)}" for name, value in overrides.items()]
-
-        parent_dir = qt.QFileDialog.getExistingDirectory(None, "Choose parent directory for the new local app")
-        if not parent_dir:
-            return
-        name = qt.QInputDialog.getText(None, "Save as local app", "New app name (folder will be created):")
+        name = qt.QInputDialog.getText(None, "Save as preset", "Preset name (letters, digits, '_' and '-'):")
         if not name or not name.strip():
-            return
-        display_name = qt.QInputDialog.getText(None, "Save as local app", "New display name:")
-        if not display_name or not display_name.strip():
-            return
-        safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", name.strip())
-        if not safe:
-            qt.QMessageBox.warning(None, "Invalid name", "Please enter a valid name.")
-            return
-
-        selection = self.template.selection_panel
-        listed = [selection.ui.appComboBox.itemText(i) for i in range(selection.ui.appComboBox.count)]
-        if display_name.strip() in listed:
-            qt.QMessageBox.critical(None, "App already listed", f'The app "{display_name.strip()}" is already listed.')
-            return
-
+            return False
+        description = qt.QInputDialog.getText(None, "Save as preset", "What it is for:") or ""
+        chosen = app.get_presets().get(self._preset)
+        edits = self._collect_param_overrides(param_widgets)
+        overrides = [
+            *(chosen.overrides if chosen else ()),
+            *(f"{key}={self._format_config_value(value)}" for key, value in edits.items()),
+        ]
+        tiles = chosen.tiles if chosen else True  # the chosen preset's tiling policy goes with its --set
         try:
-            app.export_app(Path(parent_dir) / safe, display_name=display_name.strip(), config_overrides=set_args)
-        except Exception as exc:  # noqa: BLE001 - surface any export/copy failure to the user
-            qt.QMessageBox.critical(None, "Save as local app", f"Could not save the app:\n{exc}")
-            return
-
-        new_app = LocalAppRepositoryFromDirectory(Path(parent_dir), safe)
-        selection.ui.appComboBox.addItem(helpers.app_task_icon(new_app), new_app.get_display_name(), new_app)
-        selection.ui.appComboBox.setCurrentIndex(selection.ui.appComboBox.findData(new_app))
-        selection.app_local_repositoy.append(new_app.get_name())
-        self._update_logs(f"[KonfAI] Saved local app '{display_name.strip()}' at {Path(parent_dir) / safe}.")
+            written = app.save_preset(name.strip(), description.strip(), overrides, tiles=tiles)
+        except Exception as exc:  # noqa: BLE001 - surface a refused name or override to the user
+            qt.QMessageBox.critical(None, "Save as preset", f"Could not save the preset:\n{exc}")
+            return False
+        self.template.selection_panel.refresh_presets(app, select=name.strip())
+        self.set_preset(name.strip())
+        self._update_logs(f"[KonfAI] Saved preset '{name.strip()}' of {app.get_name()} in {written}.")
         dialog.accept()
+        return True
+
+    def set_preset(self, preset: str | None) -> None:
+        """Run the app with ``preset`` (None: its base config), chosen under the app selector. Tuned parameters were
+        edits of the previous preset: they go. A preset the app's config no longer takes is refused with its reason,
+        and the previous choice and its edits stay."""
+        app = self.template.ui.appComboBox.currentData
+        if app is not None:
+            try:
+                app.use_preset(preset)
+            except Exception as exc:  # noqa: BLE001 - surface a preset that no longer applies to the user
+                import qt
+
+                qt.QMessageBox.critical(None, "Preset", f"Could not choose the preset:\n{exc}")
+                self.template.selection_panel.refresh_presets(app, select=self._preset)
+                return
+        self._preset, self._param_override = preset, {}
+        self._refresh_advanced_button()
+        if app is not None:
+            self._seed_references(app)
+
+    def _reference(self, app, preset: str | None) -> str:
+        return f"{app.get_name()}#{preset}" if preset else app.get_name()
+
+    def _reference_candidates(self, app) -> list[str]:
+        """The references an ensemble with ``app`` may take: every preset of every listed app whose inputs and outputs
+        are ``app``'s, by name and kind, in order, since every reference is given ``app``'s inputs (an app with no
+        presets as itself); ``app`` alone when it declares no outputs to match."""
+
+        def entries(some_app) -> list:
+            groups = (some_app.get_inputs(), some_app.get_outputs())
+            return [(key, entry.volume_type) for group in groups for key, entry in group.items()]
+
+        own = entries(app)
+        combo = self.template.ui.appComboBox
+        candidates = []
+        for index in range(combo.count):
+            other = combo.itemData(index)
+            if other is None or not (
+                other.get_name() == app.get_name() or (app.get_outputs() and entries(other) == own)
+            ):
+                continue
+            presets = list(other.get_presets())
+            candidates += [self._reference(other, preset) for preset in presets] or [other.get_name()]
+        return candidates
+
+    def _seed_references(self, app, selected: list[str] = ()) -> None:
+        """Start the ensemble from the reference chosen under the app selector, which stays (the run, its settings and
+        its results are its own), and those of ``selected`` still offered; the row shows when there is another to add.
+        """
+        chosen = self._reference(app, self._preset)
+        candidates = self._reference_candidates(app)
+        if chosen not in candidates:
+            candidates.insert(0, chosen)
+        self.reference_selector.locked = chosen
+        self.reference_selector.update(candidates, candidates, [chosen, *selected])  # those no longer offered drop
+        self._references_label.setVisible(len(candidates) > 1)
+        self._references_widget.setVisible(len(candidates) > 1)
+
+    def references(self) -> list[str]:
+        """The app references the run ensembles, the one chosen under the app selector first."""
+        return self.reference_selector.selected()
+
+    def state(self) -> dict:
+        """What the user chose for the app (its preset, the ensemble's references, Uncertainty, the Advanced overrides):
+        a refresh of the app's metadata after a run gives it back (:meth:`restore`)."""
+        return {
+            "preset": self._preset,
+            "references": self.references(),
+            "uncertainty": self.ui.uncertaintyCheckBox.isChecked(),
+            "overrides": (dict(self._param_override), self._patch_override, self._batch_override),
+        }
+
+    def restore(self, state: dict) -> None:
+        """Choose again what :meth:`state` kept, on the app as it was refreshed."""
+        app = self.template.ui.appComboBox.currentData
+        if app is None:
+            return
+        if state["preset"] in app.get_presets():
+            self.template.selection_panel.refresh_presets(app, select=state["preset"])
+            self.set_preset(state["preset"])
+        # A preset the refresh no longer lists, or the app refuses, stays unchosen: the parameters tuned from it go.
+        tuned, self._patch_override, self._batch_override = state["overrides"]
+        self._param_override = tuned if self._preset == state["preset"] else {}
+        self._refresh_advanced_button()
+        self._seed_references(app, state["references"])
+        # The refresh seeded one reference and so unticked Uncertainty: tick it again, unticked if the run samples once.
+        self.ui.uncertaintyCheckBox.setChecked(state["uncertainty"])
+        self._update_uncertainty_visibility()
 
     def on_app_changed(self, app) -> None:
         """
@@ -669,8 +810,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         if checkpoints_name_param and isinstance(checkpoints_name_param, str):
             checkpoints_name = checkpoints_name_param.split(",")
         self.chip_selector.update(app.get_checkpoints_name_available(), app.get_checkpoints_name(), checkpoints_name)
-        if not self.get_parameter("number_of_tta") or int(self.get_parameter("number_of_tta")) > app.get_maximum_tta():
-            self.set_parameter("number_of_tta", str(app.get_maximum_tta()))
+        self.set_parameter("number_of_tta", min(int(self.get_parameter("number_of_tta") or 0), app.get_maximum_tta()))
 
         if (
             not self.get_parameter("number_of_mc_dropout")
@@ -709,7 +849,10 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         self._patch_override = None
         self._batch_override = None
         self._param_override = {}
+        self._preset = None
+        app.use_preset(None)
         self._refresh_advanced_button()
+        self._seed_references(app)
 
         # Uncertainty estimation availability depends on app capabilities and on the run being sampled
         # several times (ensemble / TTA / MC-dropout)
@@ -723,6 +866,23 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         prompted = self.interactive.set_app(app)
         self.ui.extraInputsForm.setVisible(not prompted)
         self.ui.runInferenceButton.setVisible(not prompted)
+        if prompted:  # a session runs the app as published: no checkpoint, TTA or MC-dropout choice
+            for widget in (
+                self.ui.label_stochastic,
+                self.ui.label_ensemble,
+                self.ui.checkpointsComboBox,
+                self.ui.ensembleSpinBox,
+                self.ui.label_tta,
+                self.ui.ttaSpinBox,
+                self.ui.label_mcdo,
+                self.ui.mcDropoutSpinBox,
+                self.ui.uncertaintyCheckBox,
+                self.ui.label_selected_checkpoints,
+                self.ui.selectedCheckpointsWidget,
+                self._references_label,
+                self._references_widget,
+            ):
+                widget.setVisible(False)
 
     def cleanup(self) -> None:
         self.interactive.shutdown()
@@ -882,15 +1042,19 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         self.template.uncertainty_panel.clear_metrics()
 
         app = self.template.ui.appComboBox.currentData
+        references = self.references()
+        # The checkpoints are this app's: references of another app run their own.
+        checkpoints = self.chip_selector.selected()
+        if any(reference.split("#")[0] != app.get_name() for reference in references):
+            checkpoints = []
         args = [
             "infer",
-            app.get_name(),
+            *references,
             "-i",
             "Volume.mha",
             "-o",
             "Output",
-            "--ensemble_models",
-            *self.chip_selector.selected(),
+            *(["--ensemble_models", *checkpoints] if checkpoints else []),
             "--tta",
             str(self.ui.ttaSpinBox.value),
             "--mc",
@@ -910,7 +1074,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         # --download makes konfai-apps fetch the app upfront, with its
         # progress visible in the log panel instead of a silent stall.
         if remote_server is None:
-            missing = set(self.chip_selector.selected()) - set(app.get_checkpoints_name_available())
+            missing = set(checkpoints) - set(app.get_checkpoints_name_available())
             if missing:
                 args += ["--download"]
                 self._update_logs(
@@ -932,10 +1096,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
         sitk_image = sitkUtils.PullVolumeFromSlicer(input_node)
 
         # Store KonfAI metadata in the MHA header
-        sitk_image.SetMetaData(
-            "App",
-            app.get_name(),
-        )
+        sitk_image.SetMetaData("App", " ".join(references))
         sitk_image.SetMetaData("NumberOfEnsemble", f"{self.ui.ensembleSpinBox.value}")
         sitk_image.SetMetaData("NumberOfTTA", f"{self.ui.ttaSpinBox.value}")
         sitk_image.SetMetaData("NumberOfMCDropout", f"{self.ui.mcDropoutSpinBox.value}")
@@ -965,8 +1126,10 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
 
             data = None
             # Find the first non-stack MHA output file
+            from konfai_apps.ensemble import is_stack
+
             for file in (self._work_dir / "Output").rglob("*.mha"):
-                if file.name != "InferenceStack.mha":
+                if not is_stack(file):
                     from konfai.utils.dataset import image_to_data
 
                     data, attr = image_to_data(sitk.ReadImage(str(file)))
@@ -979,7 +1142,7 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
             # it (rglob order is not deterministic); the mono-output path above
             # stays untouched.
             if self._extra_output_selectors:
-                files = [f for f in (self._work_dir / "Output").rglob("*.mha") if f.name != "InferenceStack.mha"]
+                files = [f for f in (self._work_dir / "Output").rglob("*.mha") if not is_stack(f)]
 
                 def match_output_file(output_key: str):
                     return next((f for f in files if output_key in f.parts or f.stem == output_key), None)
@@ -1091,31 +1254,65 @@ class KonfAIAppInferencePanel(KonfAIAppPanel):
                     foregroundOpacity=0.5,
                 )
 
-            sequence_node = self.template.ui.inputVolumeSequenceSelector.currentNode()
-            if sequence_node is None:
-                sequence_node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSequenceNode", "InputTransformSequence")
-                self.template.ui.inputVolumeSequenceSelector.setCurrentNode(sequence_node)
-            else:
-                sequence_node.RemoveAllDataNodes()
-
-            for file in (self._work_dir / "Output").rglob("*.mha"):
-                if file.name == "InferenceStack.mha":
-                    inference_stack = sitk.ReadImage(str(file))
-                    if inference_stack.GetNumberOfComponentsPerPixel() > 1:
-                        data = sitk.GetArrayFromImage(inference_stack)
-                        for i in range(data.shape[-1]):
-                            img = sitk.GetImageFromArray(data[..., i])
-                            img.CopyInformation(inference_stack)
-                            temp_volume_node = sitkUtils.PushVolumeToSlicer(img, name=f"Output_stack_{i}")
-                            sequence_node.SetDataNodeAtValue(temp_volume_node, str(i))
-                            slicer.mrmlScene.RemoveNode(temp_volume_node)
-
-                    browser_node = slicer.mrmlScene.AddNewNodeByClass(
-                        "vtkMRMLSequenceBrowserNode", "SitkTransformSequenceBrowser"
-                    )
-                    browser_node.SetAndObserveMasterSequenceNodeID(sequence_node.GetID())
-                    for key, value in attr.items():
-                        sequence_node.SetAttribute(key.split("_")[0], str(value))
-                    break
+            stacks = sorted(path for path in (self._work_dir / "Output").rglob("InferenceStack.*") if path.is_file())
+            record = self._work_dir / "Output" / "konfai-run.json"
+            names = json.loads(record.read_text()).get("members") if record.is_file() else None
+            sequence_node = self.load_stack(stacks[0], names) if stacks else self.clear_stack()
+            if sequence_node is not None:
+                for key, value in attr.items():
+                    sequence_node.SetAttribute(key.split("_")[0], str(value))  # App, NumberOf*: the run's summary
 
         self.process.run("konfai-apps", self._work_dir, args, on_end_function)
+
+    def load_stack(self, path: Path, names: list[str] | None):
+        """Load an ensemble's stack as the uncertainty panel's sequence, one volume per member.
+
+        The stack holds its members' channels member-major, their count in its header (konfai_members; a stack
+        without it is one member a channel): a member of several channels, a displacement field, is one vector
+        volume. ``names`` (konfai-run.json's members) name them. The sequence keeps the count and the field mark,
+        which the uncertainty panel writes back into the stack it hands konfai-apps."""
+        from konfai.data.transform.ensemble import MEMBERS_ATTRIBUTE
+        from konfai.utils.dataset import DISPLACEMENT_FIELD_ATTRIBUTE
+
+        stack = sitk.ReadImage(str(path))
+        channels = stack.GetNumberOfComponentsPerPixel()
+        has_count = stack.HasMetaDataKey(MEMBERS_ATTRIBUTE)
+        members = int(float(stack.GetMetaData(MEMBERS_ATTRIBUTE))) if has_count else channels
+        if members < 2 or channels % members:
+            return self.clear_stack()
+        per_member = channels // members
+        data = sitk.GetArrayFromImage(stack)
+        if channels == 1:
+            data = data[..., None]
+        sequence_node = self.template.ui.inputVolumeSequenceSelector.currentNode()
+        if sequence_node is None:
+            sequence_node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSequenceNode", "InferenceStack")
+            self.template.ui.inputVolumeSequenceSelector.setCurrentNode(sequence_node)
+        else:
+            sequence_node.RemoveAllDataNodes()
+        for member in range(members):
+            part = data[..., member * per_member : (member + 1) * per_member]
+            image = sitk.GetImageFromArray(part if per_member > 1 else part[..., 0], isVector=per_member > 1)
+            image.CopyInformation(stack)
+            name = names[member] if names and len(names) == members else f"Member {member + 1}"
+            node = sitkUtils.PushVolumeToSlicer(
+                image,
+                name=name,
+                className="vtkMRMLVectorVolumeNode" if per_member > 1 else "vtkMRMLScalarVolumeNode",
+            )
+            sequence_node.SetDataNodeAtValue(node, str(member))
+            slicer.mrmlScene.RemoveNode(node)
+        field = stack.HasMetaDataKey(DISPLACEMENT_FIELD_ATTRIBUTE)
+        sequence_node.SetAttribute("KonfAI.DisplacementField", "1" if field else "")
+        browser_node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSequenceBrowserNode", "InferenceStackBrowser")
+        browser_node.SetAndObserveMasterSequenceNodeID(sequence_node.GetID())
+        self.template.update_gui_from_parameter_node()
+        return sequence_node
+
+    def clear_stack(self) -> None:
+        """Empty the uncertainty panel's sequence: a run without a stack leaves none of the previous run's members to
+        measure."""
+        sequence_node = self.template.ui.inputVolumeSequenceSelector.currentNode()
+        if sequence_node is not None:
+            sequence_node.RemoveAllDataNodes()
+        self.template.update_gui_from_parameter_node()

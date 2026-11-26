@@ -129,18 +129,34 @@ def install_package(package: str, display_name: str) -> bool:
     return True
 
 
+#: The konfai-apps the extension runs: presets (fideus-labs/KonfAI#310), evaluation from the transform (#311) and
+#: ensembles (#318), first released in 1.9.0. It pins the konfai it was released with.
+KONFAI_APPS_REQUIRED = "1.9.0"
+
+
 def install_konfai() -> bool:
-    if not install_package("konfai-apps", "KonfAI"):
-        return False
     # Deferred import: keeps the logic package importable without pulling Qt widgets at module load.
     from KonfAILib.widgets.helpers import ask_user_to_install_dependency, slicer_wait_popup
+
+    installed = get_installed_version("konfai-apps")
+    if installed is not None and Version(installed) < Version(KONFAI_APPS_REQUIRED):
+        if not ask_user_to_install_dependency(
+            "KonfAI",
+            f"KonfAI needs konfai-apps {KONFAI_APPS_REQUIRED} or newer (installed: {installed}).\n\n"
+            "Upgrade konfai and konfai-apps now?",
+        ):
+            slicer.util.selectModule("Data")
+            return False
+        with slicer_wait_popup("KonfAI dependency upgrade", f"Upgrading konfai-apps from {installed}..."):
+            slicer.util.pip_install(f"konfai-apps>={KONFAI_APPS_REQUIRED}")
+    elif not install_package("konfai-apps", "KonfAI"):
+        return False
 
     import konfai
 
     try:
         konfai.assert_konfai_install()
     except Exception as e:
-        latest = get_latest_pypi_version("konfai-apps")
         if not ask_user_to_install_dependency(
             "KonfAI",
             "KonfAI-apps is installed but not functional (missing/broken dependencies).\n\n"
@@ -150,7 +166,7 @@ def install_konfai() -> bool:
             slicer.util.selectModule("Data")
             return False
         with slicer_wait_popup("KonfAI-apps repair", "Reinstalling KonfAI-apps and dependencies..."):
-            slicer.util.pip_install(f"--upgrade --force-reinstall --no-deps konfai-apps=={latest}")
+            slicer.util.pip_install(f"--upgrade --force-reinstall --no-deps konfai-apps>={KONFAI_APPS_REQUIRED}")
             slicer.util.pip_install(
                 "tqdm numpy ruamel.yaml psutil tensorboard lxml h5py nvidia-ml-py requests huggingface_hub"
             )

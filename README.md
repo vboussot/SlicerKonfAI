@@ -59,13 +59,13 @@ https://github.com/user-attachments/assets/d3728d16-1004-4100-9e8a-f31b8e72ed75
   Inputs are Slicer nodes (DICOM, NIfTI, NRRD, MHA, several inputs when the app declares them). Outputs come back as volumes, label maps or Segmentation nodes with the names and colours of the app, and a Show 3D button.
 
 - **Sampling controls that follow the app**
-  Checkpoint chips for the ensemble, test-time augmentation and MC dropout appear only when the app supports them. The *Uncertainty* checkbox keeps every sampled prediction as an inference stack for the QA tab.
+  Preset chips (`APP#PRESET`: the preset chosen under the app, any other of its presets, or of an app with the same inputs and outputs), checkpoint chips, test-time augmentation and MC dropout appear only when the app supports them. An ensemble is their product: each preset is a run of its own, times the checkpoints and copies inside it. The *Uncertainty* checkbox keeps every member as an inference stack for the QA tab, one sequence item per member (a vector volume for a displacement field).
 
 - **Quality assurance, with or without a reference**
-  *With reference*: the app's evaluation workflow (Dice, MAE, PSNR, SSIM and the maps it defines), with an optional mask and a transform to align the output. *No reference*: the app's uncertainty workflow on the inference stack (variance maps, segmentation disagreement).
+  *With reference*: the app's evaluation workflow (Dice, MAE, PSNR, SSIM and the maps it defines), with an optional mask and a transform to align the output. *No reference*: the app's uncertainty workflows on the inference stack, one tab per workflow the app declares (`inputs_uncertainties`), each with the references it reads: the spread of the members alone, of landmarks pushed through them, the disagreement of a segmentation they propagate.
 
-- **Advanced settings and local apps**
-  Override the patch size and the batch size, edit the parameters the app exposes, restore the defaults, or save the current settings as a new local app. Scaffold a fine-tuning app from any app that ships its training configuration.
+- **Advanced settings and presets**
+  Override the patch size and the batch size, edit the parameters the app exposes, restore the defaults, or save the current settings as a preset of the app. Scaffold a fine-tuning app from any app that ships its training configuration.
 
 - **Local GPU, CPU or remote server**
   The device row lists the CPU and every GPU combination. A `konfai-apps-server` on another machine runs the same apps: add it with its host, port and token (kept in the OS keyring), pick one of its GPUs, and the RAM and VRAM gauges show its memory.
@@ -102,7 +102,7 @@ The ports reuse the original weights; the speed comes from KonfAI's patch-native
 3. Load a volume (**DICOM** module, or drag and drop a NIfTI / NRRD / MHA file).
 4. Choose an app in the list, for example *Segmentation: Total Segmentator*. Select the **input volume**, click **Run**. The segmentation is loaded as a Segmentation node; click **Show 3D**.
 5. **QA with a reference**: open **Evaluation**, tab *With reference*, pick the output (a label map for a segmentation, the volume for a synthesis) and the reference, click **Run**. Metrics appear in a list and the result images load with a click.
-6. **QA without reference**: at inference, select several checkpoints and tick **Uncertainty**; then tab *No reference (Uncertainty)*, **Run**.
+6. **QA without reference**: at inference, select several presets or checkpoints and tick **Uncertainty**; then tab *No reference (Uncertainty)*, choose a workflow tab and its references, **Run**.
 
 👉 Every step with a screenshot, plus the download dialog, the Advanced dialog, fine-tuning setup, remote servers and Studio: [`TUTORIAL.md`](TUTORIAL.md)
 
@@ -119,7 +119,7 @@ my_konfai_app/
 ├── app.json           # metadata for the interfaces
 ├── Prediction.yml     # inference workflow
 ├── Evaluation.yml     # (optional) evaluation against a reference
-├── Uncertainty.yml    # (optional) uncertainty from an inference stack
+├── Uncertainty*.yml   # (optional) uncertainty from an inference stack, listed in app.json's inputs_uncertainties
 ├── Config.yml         # (optional) training workflow, enables fine-tuning
 ├── Model.py, *.yml    # model definition
 ├── icon.png           # (optional)
@@ -154,15 +154,17 @@ SlicerKonfAI uses it to name and describe the app (`display_name`, `short_descri
 3. The `konfai-apps` CLI is launched in a separate process:
 
    ```bash
-   konfai-apps infer <app> -i Volume.mha -o Output --ensemble_models CV_0.pt CV_1.pt --tta 2 --mc 0 --gpu 0 \
-       [--patch-size 1 512 512] [--batch-size 16] [--set key=value] [-uncertainty] [--host H --port P --token T]
+   konfai-apps infer <app>[#preset] [<app>#<other preset> ...] -i Volume.mha -o Output --ensemble_models CV_0.pt CV_1.pt \
+       --tta 2 --mc 0 --gpu 0 [--patch-size 1 512 512] [--batch-size 16] [--set key=value] [-uncertainty] \
+       [--host H --port P --token T]
    konfai-apps eval <app> -i Volume.mha --gt Reference.mha [--mask Mask.mha] -o Evaluation --gpu 0
-   konfai-apps uncertainty <app> -i InferenceStack.mha -o Uncertainty --gpu 0
+   konfai-apps uncertainty <app> -i Volume.mha [--uncertainty_file Uncertainty_with_fid.yml --gt Fixed.fcsv] \
+       -o Uncertainty --gpu 0
    ```
 
    With a remote server selected, the same CLI posts the job to the server and streams its logs.
 4. stdout and stderr are streamed to the log; tqdm output drives the progress bar and the speed label.
-5. The outputs are loaded back: `uint8` volumes as Segmentation nodes, other volumes as scalar volumes shown over the input, the inference stack as a Sequence, metrics and result images in the Evaluation panel.
+5. The outputs are loaded back: `uint8` volumes as Segmentation nodes, other volumes as scalar volumes shown over the input, the inference stack as a Sequence (one item per member, named from `konfai-run.json`), metrics and result images in the Evaluation panel.
 
 ### 🔌 Building a sister extension
 
