@@ -31,7 +31,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
-import SimpleITK as sitk
+import SimpleITK as sitk  # noqa: N813
 import sitkUtils
 import slicer
 from qt import QHBoxLayout, QLabel, QProcess, QProcessEnvironment, QPushButton, QVBoxLayout, QWidget
@@ -105,6 +105,7 @@ class InteractiveSegmentation(QWidget):
         self._header = None
         self._segment = None  # the current object's segment ID
         self._sent = None  # what the last request was made of: one click fires several events
+        self._target: tuple = ()  # the volume, segmentation and segment the request in progress answers into
 
     # ---- app and worker ---------------------------------------------------------------------------------------
 
@@ -156,7 +157,7 @@ class InteractiveSegmentation(QWidget):
     def _on_worker_finished(self, *_) -> None:
         if self._worker_key is not None:  # not stopped by us
             self.status.setText("The app's worker stopped; see the Python console. Place a point to restart it.")
-        self._worker_key, self._ready, self._busy = None, False, False
+        self._worker_key, self._ready, self._busy, self._sent = None, False, False, None
 
     def _on_output(self) -> None:
         while self.process.canReadLine():
@@ -171,13 +172,16 @@ class InteractiveSegmentation(QWidget):
                 continue
             request, _, detail = rest.partition(" ")
             self._busy = False
+            output = self._dir / f"out{request}"
             if int(request) != self._request:
                 pass  # an answer for prompts reset since: nothing to show
             elif word == "done":
-                self._load(self._dir / f"out{request}")
+                self._load(output)
                 self.status.setText(f"Segmented in {float(detail):.1f} s ({len(self._order)} prompts).")
             else:
+                self._sent = None  # the same prompts may be tried again
                 self.status.setText(f"The app refused: {detail}")
+            shutil.rmtree(output, ignore_errors=True)  # loaded, or no longer wanted
             if self._pending:
                 self._pending = False
                 self._run()
@@ -293,8 +297,7 @@ class InteractiveSegmentation(QWidget):
                 inputs.append([str(self._dir / f"{previous_key}.mha")])
         self._request += 1
         output = self._dir / f"out{self._request}"
-        shutil.rmtree(self._dir / f"out{self._request - 1}", ignore_errors=True)
-        self._busy, self._sent = True, sent
+        self._busy, self._sent, self._target = True, sent, (volume_node, segmentation, segment)
         self.status.setText("Segmenting…")
         request = {"id": self._request, "inputs": inputs, "output": str(output)}
         self.process.write((json.dumps(request) + "\n").encode())
@@ -317,8 +320,14 @@ class InteractiveSegmentation(QWidget):
         if not found:
             self.status.setText(f"The app wrote no image under {output}.")
             return
-        volume_node = self.panel.ui.inputVolumeSelector.currentNode()
-        segmentation, segment = self._current_segment(volume_node)
+        # Into what the request was made for, whatever the selectors show now.
+        volume_node, segmentation, segment = self._target
+        if not all(slicer.mrmlScene.IsNodePresent(node) for node in (volume_node, segmentation)):
+            self.status.setText("The image or the segmentation of the request is gone.")
+            return
+        if segmentation.GetSegmentation().GetSegment(segment) is None:
+            self.status.setText("The segment of the request is gone.")
+            return
         mask = (sitk.GetArrayFromImage(sitk.ReadImage(str(found[0]))) > 0).astype(np.uint8)
         slicer.util.updateSegmentBinaryLabelmapFromArray(mask, segmentation, segment, volume_node)
 
